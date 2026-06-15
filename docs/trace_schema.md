@@ -159,7 +159,16 @@ metadata:
 - `torch_compile_fallback_reason`
 - `torch_compile_wall_ms`
 - `dit_cache_hook`: `fastwam_video_kv_cache`
+- `scheduler_name`: `fastwam_flowmatch_euler`
+- `solver`: `euler`
+- `schedule_type`: `shifted_flowmatch`
+- `schedule_source`: `generated`, `custom_timesteps`, or `custom_sigmas`
 - `num_inference_steps`
+- `sigma_shift`
+- `timestep_count`
+- `timesteps`: compact summary with count/first/last/min/max and values for short schedules
+- `sigmas`: compact summary with count/first/last/min/max and values for short schedules
+- `deltas`: compact summary of per-step sigma deltas
 - `video_seq_len`
 - `action_seq_len`
 - `cache_layers`
@@ -198,9 +207,14 @@ parsing. Standard field groups are:
 - `scheduler_name`
 - `solver`
 - `num_inference_steps`
+- `sigma_shift`
+- `timestep_count`
 - `timesteps`
 - `sigmas`
 - `schedule_type`
+- `schedule_source`
+- `denoise_wall_ms`
+- `total_ms`
 
 `dtype`:
 

@@ -94,6 +94,10 @@ def test_libero_runtime_options_include_acceleration_modes(tmp_path) -> None:
         shard_id=0,
         num_shards=1,
         values={
+            "scheduler_name": "fastwam_flowmatch_euler",
+            "schedule_type": "shifted_flowmatch",
+            "sigma_shift": "3.0",
+            "timesteps": "1000,500,250,125",
             "dit_cache_mode": "video_kv",
             "cuda_graph_mode": "off",
             "torch_compile_mode": "auto",
@@ -102,6 +106,10 @@ def test_libero_runtime_options_include_acceleration_modes(tmp_path) -> None:
 
     assert libero_runtime_options(context) == {
         "num_inference_steps": 10,
+        "scheduler_name": "fastwam_flowmatch_euler",
+        "schedule_type": "shifted_flowmatch",
+        "sigma_shift": "3.0",
+        "timesteps": "1000,500,250,125",
         "dit_cache_mode": "video_kv",
         "cuda_graph_mode": "off",
         "torch_compile_mode": "auto",
@@ -125,6 +133,10 @@ def test_robotwin_runtime_options_include_acceleration_modes(tmp_path) -> None:
         num_shards=1,
         values={
             "num_inference_steps": 10,
+            "scheduler_name": "fastwam_flowmatch_euler",
+            "schedule_type": "shifted_flowmatch",
+            "sigma_shift": "3.0",
+            "sigmas": "1.0,0.5,0.25,0.125",
             "dit_cache_mode": "video_kv",
             "cuda_graph_mode": "off",
             "torch_compile_mode": "auto",
@@ -133,6 +145,10 @@ def test_robotwin_runtime_options_include_acceleration_modes(tmp_path) -> None:
 
     assert robotwin_runtime_options(context) == {
         "num_inference_steps": 10,
+        "scheduler_name": "fastwam_flowmatch_euler",
+        "schedule_type": "shifted_flowmatch",
+        "sigma_shift": "3.0",
+        "sigmas": "1.0,0.5,0.25,0.125",
         "dit_cache_mode": "video_kv",
         "cuda_graph_mode": "off",
         "torch_compile_mode": "auto",
@@ -145,7 +161,13 @@ def test_eval_runner_native_dry_run_is_default_for_fastwam_single_task(tmp_path)
         trace_dir=tmp_path,
         cache_dir=tmp_path / "cache",
         dry_run=True,
-        overrides={"task_id": "3", "num_trials": "1"},
+        enabled_opts=["scheduler"],
+        overrides={
+            "task_id": "3",
+            "num_trials": "1",
+            "num_inference_steps": "6",
+            "sigma_shift": "3.0",
+        },
     )
 
     assert summary.status == "planned"
@@ -169,6 +191,10 @@ def test_eval_runner_native_dry_run_is_default_for_fastwam_single_task(tmp_path)
     assert events[1]["task_id"] == 3
     assert events[1]["seed"] == 42
     assert events[1]["num_steps_wait"] == 30
+    assert events[1]["runtime_options"]["num_inference_steps"] == 6
+    assert events[1]["runtime_options"]["sigma_shift"] == "3.0"
+    assert events[1]["runtime_options"]["scheduler_name"] == "fastwam_flowmatch_euler"
+    assert events[1]["runtime_options"]["schedule_type"] == "shifted_flowmatch"
     assert summary.command.env["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] == "1"
     assert summary.command.env["TOKENIZERS_PARALLELISM"] == "false"
     assert summary.command.env["WANDB_MODE"] == "offline"
@@ -251,7 +277,13 @@ def test_eval_runner_native_robotwin_dry_run_is_default(tmp_path) -> None:
         cache_dir=tmp_path / "cache",
         upstream_dir="/tmp/FastWAM",
         dry_run=True,
-        overrides={"task_name": "click_alarmclock", "num_episodes": "1"},
+        enabled_opts=["scheduler"],
+        overrides={
+            "task_name": "click_alarmclock",
+            "num_episodes": "1",
+            "num_inference_steps": "6",
+            "sigma_shift": "3.0",
+        },
     )
 
     assert summary.status == "planned"
@@ -274,6 +306,10 @@ def test_eval_runner_native_robotwin_dry_run_is_default(tmp_path) -> None:
     assert plan["replan_steps"] == 24
     assert plan["action_horizon"] == 32
     assert plan["task_name"] == "click_alarmclock"
+    assert plan["runtime_options"]["num_inference_steps"] == "6"
+    assert plan["runtime_options"]["sigma_shift"] == "3.0"
+    assert plan["runtime_options"]["scheduler_name"] == "fastwam_flowmatch_euler"
+    assert plan["runtime_options"]["schedule_type"] == "shifted_flowmatch"
 
 
 def test_eval_runner_dry_run_plans_fastwam_robotwin_manager(tmp_path) -> None:

@@ -43,6 +43,7 @@ def default_registry() -> Registry:
     registry.register_runtime_resolver(native_runtime_resolver)
     registry.register_optimization("fake_cache", {"cache_scope": "replan"})
     registry.register_optimization("action_chunk_scheduling", {})
+    registry.register_optimization("scheduler", {})
     registry.register_optimization("dit_cache", {})
     registry.register_optimization("cuda_graph", {"mode": "auto", "capture": "action_body"})
     registry.register_optimization("torch_compile", {"mode": "auto", "target": "action_body"})

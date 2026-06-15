@@ -1,6 +1,56 @@
 import torch
 
 
+def _as_1d_float_tensor(
+    values: object,
+    *,
+    name: str,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    if isinstance(values, str):
+        items = [float(item.strip()) for item in values.split(",") if item.strip()]
+    elif isinstance(values, torch.Tensor):
+        items = values
+    else:
+        items = [float(item) for item in values]
+    tensor = torch.as_tensor(items, device=device, dtype=torch.float32).flatten()
+    if tensor.numel() == 0:
+        raise ValueError(f"`{name}` must contain at least one value.")
+    if not torch.isfinite(tensor).all():
+        raise ValueError(f"`{name}` must contain only finite values.")
+    return tensor.to(dtype=dtype)
+
+
+def _round_float(value: float) -> float:
+    return round(float(value), 8)
+
+
+def _summarize_1d_tensor(values: torch.Tensor, *, max_items: int = 64) -> dict[str, object]:
+    detached = values.detach().to(device="cpu", dtype=torch.float64).flatten()
+    count = int(detached.numel())
+    payload: dict[str, object] = {"count": count}
+    if count == 0:
+        payload.update({"first": None, "last": None, "min": None, "max": None})
+        return payload
+
+    float_values = [_round_float(item) for item in detached.tolist()]
+    payload.update(
+        {
+            "first": float_values[0],
+            "last": float_values[-1],
+            "min": _round_float(detached.min().item()),
+            "max": _round_float(detached.max().item()),
+        }
+    )
+    if count <= max_items:
+        payload["values"] = float_values
+    else:
+        payload["head"] = float_values[:8]
+        payload["tail"] = float_values[-8:]
+    return payload
+
+
 class WanContinuousFlowMatchScheduler:
     """Continuous-time Flow-Matching scheduler with shift-based sampling."""
 
@@ -66,7 +116,35 @@ class WanContinuousFlowMatchScheduler:
         device: torch.device,
         dtype: torch.dtype,
         shift_override: float | None = None,
+        timesteps: object | None = None,
+        sigmas: object | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        if timesteps is not None and sigmas is not None:
+            raise ValueError("`timesteps` and `sigmas` are mutually exclusive.")
+        if sigmas is not None:
+            sigma_steps = _as_1d_float_tensor(sigmas, name="sigmas", device=device, dtype=dtype)
+            if sigma_steps.numel() != num_inference_steps:
+                raise ValueError(
+                    "`sigmas` length must match `num_inference_steps`: "
+                    f"{sigma_steps.numel()} != {num_inference_steps}"
+                )
+            return self._schedule_from_sigmas(sigma_steps, dtype=dtype)
+        if timesteps is not None:
+            timestep_steps = _as_1d_float_tensor(
+                timesteps,
+                name="timesteps",
+                device=device,
+                dtype=dtype,
+            )
+            if timestep_steps.numel() != num_inference_steps:
+                raise ValueError(
+                    "`timesteps` length must match `num_inference_steps`: "
+                    f"{timestep_steps.numel()} != {num_inference_steps}"
+                )
+            sigma_steps = timestep_steps / float(self.num_train_timesteps)
+            _, deltas = self._schedule_from_sigmas(sigma_steps, dtype=dtype)
+            return timestep_steps.to(dtype=dtype), deltas
+
         if num_inference_steps <= 0:
             raise ValueError(f"`num_inference_steps` must be positive, got {num_inference_steps}")
         shift = self.shift if shift_override is None else float(shift_override)
@@ -78,6 +156,49 @@ class WanContinuousFlowMatchScheduler:
         timesteps = sigma_steps[:-1] * float(self.num_train_timesteps)
         deltas = sigma_steps[1:] - sigma_steps[:-1]
         return timesteps.to(dtype=dtype), deltas.to(dtype=dtype)
+
+    def _schedule_from_sigmas(
+        self,
+        sigma_steps: torch.Tensor,
+        *,
+        dtype: torch.dtype,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if torch.any(sigma_steps < 0) or torch.any(sigma_steps > 1):
+            raise ValueError("`sigmas` must be in the inclusive range [0, 1].")
+        terminal = torch.zeros(1, device=sigma_steps.device, dtype=sigma_steps.dtype)
+        sigma_path = torch.cat([sigma_steps, terminal])
+        deltas = sigma_path[1:] - sigma_path[:-1]
+        timesteps = sigma_steps * float(self.num_train_timesteps)
+        return timesteps.to(dtype=dtype), deltas.to(dtype=dtype)
+
+    def inference_schedule_metadata(
+        self,
+        *,
+        num_inference_steps: int,
+        timesteps: torch.Tensor,
+        deltas: torch.Tensor,
+        shift_override: float | None = None,
+        schedule_type: str = "shifted_flowmatch",
+        schedule_source: str = "generated",
+    ) -> dict[str, object]:
+        shift = self.shift if shift_override is None else float(shift_override)
+        sigma_steps = timesteps.detach().to(device="cpu", dtype=torch.float64) / float(
+            self.num_train_timesteps
+        )
+        delta_steps = deltas.detach().to(device="cpu", dtype=torch.float64)
+        return {
+            "scheduler_name": "fastwam_flowmatch_euler",
+            "solver": "euler",
+            "schedule_type": schedule_type,
+            "schedule_source": schedule_source,
+            "num_train_timesteps": self.num_train_timesteps,
+            "num_inference_steps": int(num_inference_steps),
+            "sigma_shift": shift,
+            "timestep_count": int(timesteps.numel()),
+            "timesteps": _summarize_1d_tensor(timesteps),
+            "sigmas": _summarize_1d_tensor(sigma_steps),
+            "deltas": _summarize_1d_tensor(delta_steps),
+        }
 
     @staticmethod
     def step(model_output: torch.Tensor, delta: torch.Tensor, sample: torch.Tensor) -> torch.Tensor:

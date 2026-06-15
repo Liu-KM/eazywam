@@ -1024,6 +1024,10 @@ class FastWAM(torch.nn.Module):
         text_cfg_scale: float = 1.0,
         num_inference_steps: int = 20,
         sigma_shift: Optional[float] = None,
+        scheduler_name: str = "fastwam_flowmatch_euler",
+        schedule_type: str = "shifted_flowmatch",
+        timesteps: object | None = None,
+        sigmas: object | None = None,
         seed: Optional[int] = None,
         rand_device: str = "cpu",
         tiled: bool = False,
@@ -1041,6 +1045,10 @@ class FastWAM(torch.nn.Module):
                 context_mask=context_mask.clone() if context_mask is not None else None,
                 num_inference_steps=num_inference_steps,
                 sigma_shift=sigma_shift,
+                scheduler_name=scheduler_name,
+                schedule_type=schedule_type,
+                timesteps=timesteps,
+                sigmas=sigmas,
                 seed=seed,
                 rand_device=rand_device,
                 tiled=tiled,
@@ -1143,12 +1151,16 @@ class FastWAM(torch.nn.Module):
             device=self.device,
             dtype=latents_video.dtype,
             shift_override=sigma_shift,
+            timesteps=timesteps,
+            sigmas=sigmas,
         )
         infer_timesteps_action, infer_deltas_action = self.infer_action_scheduler.build_inference_schedule(
             num_inference_steps=num_inference_steps,
             device=self.device,
             dtype=latents_action.dtype,
             shift_override=sigma_shift,
+            timesteps=timesteps,
+            sigmas=sigmas,
         )
         for step_t_video, step_delta_video, step_t_action, step_delta_action in zip(
             infer_timesteps_video,
@@ -1202,6 +1214,10 @@ class FastWAM(torch.nn.Module):
         text_cfg_scale: float = 1.0,
         num_inference_steps: int = 20,
         sigma_shift: Optional[float] = None,
+        scheduler_name: str = "fastwam_flowmatch_euler",
+        schedule_type: str = "shifted_flowmatch",
+        timesteps: object | None = None,
+        sigmas: object | None = None,
         seed: Optional[int] = None,
         rand_device: str = "cpu",
         tiled: bool = False,
@@ -1224,6 +1240,16 @@ class FastWAM(torch.nn.Module):
             raise ValueError(
                 "`torch_compile_mode` must be one of: off, auto, default, "
                 f"reduce-overhead, max-autotune; got {torch_compile_mode!r}."
+            )
+        if scheduler_name != "fastwam_flowmatch_euler":
+            raise ValueError(
+                "`scheduler_name` must be fastwam_flowmatch_euler for the current "
+                f"FastWAM action scheduler, got {scheduler_name!r}."
+            )
+        if schedule_type != "shifted_flowmatch":
+            raise ValueError(
+                "`schedule_type` must be shifted_flowmatch for the current "
+                f"FastWAM action scheduler, got {schedule_type!r}."
             )
         if str(getattr(self.video_expert, "video_attention_mask_mode", "")) != "first_frame_causal":
             raise ValueError(
@@ -1358,6 +1384,21 @@ class FastWAM(torch.nn.Module):
             device=self.device,
             dtype=latents_action.dtype,
             shift_override=sigma_shift,
+            timesteps=timesteps,
+            sigmas=sigmas,
+        )
+        schedule_source = "generated"
+        if sigmas is not None:
+            schedule_source = "custom_sigmas"
+        elif timesteps is not None:
+            schedule_source = "custom_timesteps"
+        scheduler_metadata = self.infer_action_scheduler.inference_schedule_metadata(
+            num_inference_steps=num_inference_steps,
+            timesteps=infer_timesteps_action,
+            deltas=infer_deltas_action,
+            shift_override=sigma_shift,
+            schedule_type=schedule_type,
+            schedule_source=schedule_source,
         )
         denoise_start = time.perf_counter()
         for step_t_action, step_delta_action in zip(infer_timesteps_action, infer_deltas_action):
@@ -1388,6 +1429,7 @@ class FastWAM(torch.nn.Module):
                 "dit_cache_mode": cache_mode,
                 "dit_cache_hook": "fastwam_video_kv_cache",
                 "fastwam_batch_size": int(batch_size),
+                **scheduler_metadata,
                 "num_inference_steps": int(num_inference_steps),
                 "video_seq_len": cache_state.video_seq_len if cache_state is not None else None,
                 "action_seq_len": int(latents_action.shape[1]),
