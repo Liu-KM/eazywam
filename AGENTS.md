@@ -62,6 +62,19 @@ into the core runner.
   traced, and compared.
 - Prefer dependency isolation over forcing all WAM stacks into one environment.
 
+## Code Style
+
+Write code in a simple, direct, and clear style.
+
+- Avoid defensive programming unless there is a real boundary, user input,
+  external dependency, or recoverable failure mode.
+- Keep error handling minimal and purposeful. Prefer clear failures over layers
+  of broad catches, fallbacks, or speculative validation.
+- Do not add abstractions, guards, retries, compatibility paths, or warnings
+  just in case. Add them only when the current contract or tests require them.
+- Prefer readable control flow and explicit data shapes over cleverness or
+  framework-style indirection.
+
 ## Backend And Processor Model
 
 - `backend`: loads or connects to a WAM implementation and exposes the inference
