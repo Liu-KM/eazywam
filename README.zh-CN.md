@@ -138,6 +138,23 @@ harness contract，不作为模型库 entry 展示。
 | `cosmos-policy-libero` | [![GitHub](https://img.shields.io/badge/GitHub-Cosmos--Policy-181717?logo=github)](https://github.com/NVlabs/cosmos-policy) [![Hugging Face](https://img.shields.io/badge/HF-Cosmos--Policy--LIBERO-FFD21E?logo=huggingface)](https://huggingface.co/nvidia/Cosmos-Policy-LIBERO-Predict2-2B) | `wam info cosmos-policy-libero` | native smoke 和官方脚本 parity 集成已开始。 |
 | `dreamzero-droid-sim` | [![GitHub](https://img.shields.io/badge/GitHub-DreamZero-181717?logo=github)](https://github.com/dreamzero0/dreamzero) [![Hugging Face](https://img.shields.io/badge/HF-DreamZero--DROID-FFD21E?logo=huggingface)](https://huggingface.co/GEAR-Dreams/DreamZero-DROID) [![Hugging Face](https://img.shields.io/badge/HF-DROID_sim_assets-FFD21E?logo=huggingface)](https://huggingface.co/owhan/DROID-sim-environments) | `wam info dreamzero-droid-sim` | resident policy-server 路径已开始；DROID sim 需要更重的多 GPU runtime。 |
 
+## 加速路线图
+
+EazyWAM 把推理加速做成显式 optimization profile。一个 profile 在进入默认路径前，
+必须声明作用范围、参数、trace 字段、输出检查和 rollout 状态。完整 profile 合同见
+[`docs/optimization_profiles.md`](docs/optimization_profiles.md)。
+
+| 类别 | 技术 | 当前状态 |
+| --- | --- | --- |
+| Policy runtime | action chunking、receding horizon、execute horizon、temporal ensemble | runner 已实现 `action_horizon` 和 `replan_steps`；`execute_horizon` 和 `temporal_ensemble` 仍在规划中。 |
+| Output control | action-only inference、no future video decode/save、text/goal embedding cache | FastWAM 已使用 action-only native inference，并默认 `return_future=false`；text/goal embedding cache 仍在规划中。 |
+| Scheduler / sampler | `num_inference_steps`、自定义 timesteps/sigmas、DPM-Solver++、UniPC、AYS、Karras、FlowMatch schedules | FastWAM 已通过 backend options 暴露 step count 和 sigma shift；跨 backend scheduler adapter 仍在规划中。 |
+| Precision and attention | bf16/fp16/fp32、TF32、SDPA、FlashAttention、xFormers、SageAttention | bf16 默认值和 PyTorch SDPA 已部分支持；显式 backend selector 仍在规划中。SageAttention 保持 optional。 |
+| Native cache and exact runtime | FastWAM `dit_cache` (`video_kv`)、CUDA Graph、torch.compile、warmup/preallocation | FastWAM 已实现 `dit_cache` 和 `cuda_graph(auto)`；CUDA Graph 已有 SuperPod H800 加速证据。`torch_compile` 仍是 experimental，默认关闭。 |
+| WAM-specific approximate cache | TeaCache、PAB、FasterCache、cross-chunk cache、step skipping | TeaCache 是下一步 planned approximate DiT cache profile。PAB 和 FasterCache 先作为 optional benchmark backend，不默认启用。 |
+| Throughput and serving | eval sharding、batched action denoise、dynamic batch serving、xDiT/multi-GPU | `wam serve` 已有基础 policy endpoint；batch eval/serving 和 xDiT-style multi-GPU 仍在规划中。 |
+| Experimental / not default | token merging、AsymRnR、Sparse VideoGen、PTQ methods、FP8 TensorRT | 只作为研究方向跟踪；进入 runtime profile 前需要模型级 success-rate 证据。 |
+
 ## 常用命令
 
 ```bash
@@ -170,6 +187,7 @@ uv run ruff check .
 - `docs/dependency_isolation.md` - 容器和自管理环境。
 - `docs/wamfile.md` - model entry schema。
 - `docs/optimization_integration.md` - optimization profile 设计。
+- `docs/optimization_profiles.md` - 加速 profile 分类和状态。
 - `docs/trace_schema.md` - trace 事件 schema。
 - `docs/roadmap.md` - 当前里程碑。
 

@@ -153,12 +153,15 @@ a local container runtime, an existing cluster allocation, or another wrapper.
 
 Keep these documents aligned before or during implementation:
 
+- `README.md` and `README.zh-CN.md` must be updated together whenever public
+  user-facing README content changes. Do not update only one language version.
 - `docs/product_direction.md`
 - `docs/contract.md`
 - `docs/cli_entrypoints.md`
 - `docs/wamfile.md`
 - `docs/runtime_abstraction.md`
 - `docs/dependency_isolation.md`
+- `docs/optimization_profiles.md`
 - `docs/roadmap.md`
 - `docs/trace_schema.md`
 
