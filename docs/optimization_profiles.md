@@ -163,6 +163,8 @@ default: backend_default
 scope: request
 parameters:
   num_inference_steps: null
+  sigma_shift: null
+  scheduler_name: backend_default
   solver: backend_default
   schedule_type: backend_default
   timesteps: null
@@ -174,17 +176,33 @@ trace_fields:
   - scheduler_name
   - solver
   - num_inference_steps
+  - sigma_shift
+  - timestep_count
   - timesteps
   - sigmas
   - schedule_type
+  - schedule_source
+  - denoise_wall_ms
+  - total_ms
 output_check: action_drift_or_success_rate
-status: planned
+status: partial
 ```
 
 Target solvers and schedules include DPM-Solver++, UniPC, AYS, Karras, and
 FlowMatch Euler/Heun adapters. This contract should call backend or Diffusers
 schedulers where possible instead of reimplementing solvers in the harness
 core.
+
+FastWAM currently exposes a training-free `scheduler` profile for its native
+shifted FlowMatch Euler action scheduler. The default profile parameters are
+null for `num_inference_steps`, `sigma_shift`, `timesteps`, and `sigmas`, so
+enabling the profile without overrides does not change the current 10-step
+FastWAM LIBERO/RoboTwin eval baseline. Users can sweep values through eval
+manifest overrides, for example `wam eval fastwam-libero --opt scheduler --set
+num_inference_steps=6 --set sigma_shift=3.0`, or through request
+`runtime_options` on resident native inference paths. `timesteps` and `sigmas`
+are mutually exclusive Diffusers-style custom schedule inputs; when provided,
+FastWAM traces `schedule_source` as `custom_timesteps` or `custom_sigmas`.
 
 ### `dtype`
 

@@ -108,6 +108,7 @@ defaults:
 optimizations:
   supported:
     - action_chunk_scheduling
+    - scheduler
     - dit_cache
     - cuda_graph
     - torch_compile
@@ -117,6 +118,16 @@ optimizations:
       enabled: true
       scope: simulator_eval
       params: {}
+    scheduler:
+      enabled: false
+      scope: native_backend
+      params:
+        scheduler_name: fastwam_flowmatch_euler
+        schedule_type: shifted_flowmatch
+        num_inference_steps: null
+        sigma_shift: null
+        timesteps: null
+        sigmas: null
     dit_cache:
       enabled: true
       scope: native_backend
@@ -191,6 +202,10 @@ eval:
     max_tasks_per_gpu: "1"
     create_only: "False"
     task_file: "null"
+    num_inference_steps: "10"
+    sigma_shift: "null"
+    scheduler_name: fastwam_flowmatch_euler
+    schedule_type: shifted_flowmatch
     diffsynth_download_source: huggingface
     diffsynth_model_base_path: "{cache_dir}/diffsynth-models"
     redirect_common_files: "False"
@@ -230,6 +245,8 @@ eval:
           - EVALUATION.output_dir={output_dir}/fastwam_libero
           - EVALUATION.num_trials={num_trials}
           - EVALUATION.num_steps_wait={num_steps_wait}
+          - EVALUATION.num_inference_steps={num_inference_steps}
+          - EVALUATION.sigma_shift={sigma_shift}
           - MULTIRUN.num_gpus={num_gpus}
           - MULTIRUN.max_tasks_per_gpu={max_tasks_per_gpu}
           - MULTIRUN.task_suite_names=[libero_10]
@@ -245,6 +262,9 @@ eval:
         task_id: "0"
         gpu_id: "0"
         num_inference_steps: "10"
+        sigma_shift: "null"
+        scheduler_name: fastwam_flowmatch_euler
+        schedule_type: shifted_flowmatch
         num_steps_wait: "30"
         visualize_future_video: "False"
       command:
@@ -273,6 +293,7 @@ eval:
           - EVALUATION.task_suite_name={task_suite_name}
           - EVALUATION.task_id={task_id}
           - EVALUATION.num_inference_steps={num_inference_steps}
+          - EVALUATION.sigma_shift={sigma_shift}
           - EVALUATION.num_steps_wait={num_steps_wait}
           - EVALUATION.visualize_future_video={visualize_future_video}
           - model.redirect_common_files={redirect_common_files}

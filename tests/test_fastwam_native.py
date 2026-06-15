@@ -87,6 +87,26 @@ def test_fastwam_manifests_build_teacache_profile_but_keep_it_default_off() -> N
         assert "teacache" not in {profile.name for profile in default_profiles}
 
 
+def test_fastwam_manifests_build_scheduler_profile_without_changing_default_steps() -> None:
+    registry = default_registry()
+
+    for model_id in ("fastwam-libero", "fastwam-robotwin"):
+        manifest = registry.load_manifest(model_id)
+        profiles = registry.build_optimization_profiles(manifest, ["scheduler"])
+
+        assert "scheduler" in manifest.supported_optimizations
+        assert profiles[0].name == "scheduler"
+        assert profiles[0].params == {
+            "scheduler_name": "fastwam_flowmatch_euler",
+            "schedule_type": "shifted_flowmatch",
+            "num_inference_steps": None,
+            "sigma_shift": None,
+            "timesteps": None,
+            "sigmas": None,
+        }
+        assert str(manifest.eval["defaults"]["num_inference_steps"]) == "10"
+
+
 def test_default_registry_exposes_fastwam_libero_processor() -> None:
     registry = default_registry()
     manifest = load_builtin_manifest("fastwam-libero")
@@ -297,6 +317,8 @@ def test_fastwam_native_backend_matches_official_infer_action_kwargs() -> None:
     assert model.kwargs["num_video_frames"] == 9
     assert model.kwargs["negative_prompt"] == "avoid blur"
     assert model.kwargs["num_inference_steps"] == 7
+    assert model.kwargs["scheduler_name"] == "fastwam_flowmatch_euler"
+    assert model.kwargs["schedule_type"] == "shifted_flowmatch"
     assert model.kwargs["cache_mode"] == "video_kv"
     assert model.kwargs["seed"] == 123
     assert isinstance(backend.model_adapter, FastWAMModelAdapter)
@@ -418,6 +440,111 @@ def test_fastwam_model_adapter_passes_profile_cache_mode_and_metadata() -> None:
     assert call.metadata["cache_prefill_wall_ms"] is None
     assert call.metadata["denoise_wall_ms"] == 1.0
     assert call.metadata["cache_bytes"] is None
+    assert adapter.model.kwargs["num_inference_steps"] == 10
+    assert adapter.model.kwargs["sigma_shift"] is None
+    assert adapter.model.kwargs["scheduler_name"] == "fastwam_flowmatch_euler"
+    assert adapter.model.kwargs["schedule_type"] == "shifted_flowmatch"
+
+
+def test_fastwam_model_adapter_scheduler_profile_and_runtime_options() -> None:
+    adapter = FastWAMModelAdapter(
+        model=_ModelRequiringNumVideoFrames(),
+        cfg=_fastwam_cfg(),
+        checkpoint_path=None,
+        dataset_stats_path=None,
+        config={},
+        dit_cache_params={"mode": "video_kv"},
+        scheduler_params={
+            "num_inference_steps": 6,
+            "sigma_shift": 3.0,
+            "scheduler_name": "fastwam_flowmatch_euler",
+            "schedule_type": "shifted_flowmatch",
+            "sigmas": [1.0, 0.5, 0.125, 0.0, 0.0, 0.0],
+        },
+        no_grad_factory=lambda: nullcontext(),
+        error_cls=FastWAMNativeBackendError,
+    )
+
+    profiled = adapter.infer(
+        InferenceRequest(
+            observation=Observation(images={}, prompt="open the drawer"),
+            action_horizon=32,
+            replan_steps=10,
+        ),
+        {"prompt": "prompt", "input_image": "image", "proprio": "proprio"},
+    )
+    assert adapter.model.kwargs["sigmas"] == [1.0, 0.5, 0.125, 0.0, 0.0, 0.0]
+    overridden = adapter.infer(
+        InferenceRequest(
+            observation=Observation(images={}, prompt="open the drawer"),
+            action_horizon=32,
+            replan_steps=10,
+            runtime_options={
+                "num_inference_steps": 4,
+                "sigma_shift": 2.0,
+                "timesteps": "1000,500,250,125",
+            },
+        ),
+        {"prompt": "prompt", "input_image": "image", "proprio": "proprio"},
+    )
+
+    assert profiled.metadata["scheduler_profile_enabled"] is True
+    assert profiled.metadata["num_inference_steps"] == 6
+    assert profiled.metadata["fastwam_call"] == "infer_action"
+    assert overridden.metadata["num_inference_steps"] == 4
+    assert adapter.model.kwargs["sigma_shift"] == 2.0
+    assert adapter.model.kwargs["timesteps"] == "1000,500,250,125"
+
+
+def test_fastwam_model_adapter_accepts_string_null_sigma_shift_runtime_option() -> None:
+    adapter = FastWAMModelAdapter(
+        model=_ModelRequiringNumVideoFrames(),
+        cfg=_fastwam_cfg(),
+        checkpoint_path=None,
+        dataset_stats_path=None,
+        config={},
+        dit_cache_params={"mode": "video_kv"},
+        scheduler_params={"sigma_shift": 3.0},
+        no_grad_factory=lambda: nullcontext(),
+        error_cls=FastWAMNativeBackendError,
+    )
+
+    call = adapter.infer(
+        InferenceRequest(
+            observation=Observation(images={}, prompt="open the drawer"),
+            action_horizon=32,
+            replan_steps=10,
+            runtime_options={"num_inference_steps": 6, "sigma_shift": "null"},
+        ),
+        {"prompt": "prompt", "input_image": "image", "proprio": "proprio"},
+    )
+
+    assert call.metadata["num_inference_steps"] == 6
+    assert adapter.model.kwargs["sigma_shift"] is None
+
+
+def test_fastwam_model_adapter_rejects_unsupported_custom_scheduler_values() -> None:
+    adapter = FastWAMModelAdapter(
+        model=_ModelWithoutCustomScheduleKwargs(),
+        cfg=_fastwam_cfg(),
+        checkpoint_path=None,
+        dataset_stats_path=None,
+        config={},
+        dit_cache_params={},
+        no_grad_factory=lambda: nullcontext(),
+        error_cls=FastWAMNativeBackendError,
+    )
+
+    with pytest.raises(FastWAMNativeBackendError, match="custom scheduler timesteps"):
+        adapter.infer(
+            InferenceRequest(
+                observation=Observation(images={}, prompt="open the drawer"),
+                action_horizon=32,
+                replan_steps=10,
+                runtime_options={"timesteps": "1000,500,250,125"},
+            ),
+            {"prompt": "prompt", "input_image": "image", "proprio": "proprio"},
+        )
 
 
 def test_fastwam_model_adapter_runtime_options_switch_cached_and_recompute_modes() -> None:
@@ -980,6 +1107,28 @@ def test_fastwam_teacache_profile_status_planned_fallback_and_applied() -> None:
     assert applied[0]["hook"] == "fastwam_teacache_action_step_output"
 
 
+def test_fastwam_scheduler_profile_status_planned_fallback_and_applied() -> None:
+    registry = default_registry()
+    data = load_builtin_manifest("fastwam-libero").to_dict()
+    data["backend"] = {"name": "fastwam", "mode": "native", "config": {}}
+    manifest = manifest_from_dict(data)
+    profiles = registry.build_optimization_profiles(manifest, ["scheduler"])
+    backend = registry.create_backend(manifest, profiles)
+
+    planned = backend.plan_optimization_profiles(profiles)
+    fallback = backend.apply_loaded_optimization_profiles(profiles)
+    backend.model = _ModelRequiringNumVideoFrames()
+    backend.loaded = True
+    applied = backend.apply_loaded_optimization_profiles(profiles)
+
+    assert planned[0]["state"] == "planned"
+    assert planned[0]["hook"] == "fastwam_flowmatch_euler_scheduler"
+    assert fallback[0]["state"] == "fallback"
+    assert fallback[0]["reason"] == "backend_not_loaded"
+    assert applied[0]["state"] == "applied"
+    assert applied[0]["hook"] == "fastwam_flowmatch_euler_scheduler"
+
+
 def test_fastwam_native_teacache_reduces_action_noise_step_calls() -> None:
     torch = pytest.importorskip("torch")
     from fastwam.models.wan22.fastwam import FastWAM, _VideoKVCacheState
@@ -1323,6 +1472,50 @@ class _FastWAMCacheHookMot:
 
     def forward_action_with_video_cache(self):
         return None
+
+
+class _ModelWithoutCustomScheduleKwargs:
+    def infer_action(
+        self,
+        *,
+        prompt,
+        input_image,
+        action_horizon,
+        negative_prompt,
+        text_cfg_scale,
+        num_inference_steps,
+        proprio,
+        sigma_shift,
+        seed,
+        rand_device,
+        tiled,
+        cache_mode,
+        scheduler_name,
+        schedule_type,
+    ):
+        del (
+            prompt,
+            input_image,
+            action_horizon,
+            negative_prompt,
+            text_cfg_scale,
+            num_inference_steps,
+            proprio,
+            sigma_shift,
+            seed,
+            rand_device,
+            tiled,
+            cache_mode,
+            scheduler_name,
+            schedule_type,
+        )
+        return {"action": [[0.0] * 7], "metadata": {}}
+
+    def to(self, device):
+        return self
+
+    def eval(self):
+        return self
 
 
 class _ModelWithFastWAMCacheHook:

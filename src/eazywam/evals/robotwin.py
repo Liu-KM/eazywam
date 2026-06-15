@@ -143,6 +143,7 @@ class RobotWinSingleTaskEvalRunner:
                 action_horizon=context.action_horizon,
                 replan_steps=context.replan_steps,
                 robotwin_root=str(context.robotwin_root),
+                runtime_options=_runtime_options(context),
                 command=command.to_dict(),
             )
             if dry_run:
@@ -669,6 +670,10 @@ def _runtime_options(context: _EvalContext) -> dict[str, object]:
     options: dict[str, object] = {}
     for key in (
         "num_inference_steps",
+        "scheduler_name",
+        "schedule_type",
+        "timesteps",
+        "sigmas",
         "dit_cache_mode",
         "cuda_graph_mode",
         "torch_compile_mode",

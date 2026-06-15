@@ -161,6 +161,7 @@ class FastWAMModelAdapter(NativeModelAdapter):
         dataset_stats_path: Path | None,
         config: dict[str, Any],
         dit_cache_params: dict[str, object],
+        scheduler_params: dict[str, object] | None = None,
         no_grad_factory: Callable[[], object],
         error_cls: type[FastWAMNativeBackendError],
         cuda_graph_params: dict[str, object] | None = None,
@@ -176,6 +177,7 @@ class FastWAMModelAdapter(NativeModelAdapter):
         self.dataset_stats_path = dataset_stats_path
         self.config = config
         self.dit_cache_params = dit_cache_params
+        self.scheduler_params = scheduler_params or {}
         self.cuda_graph_params = cuda_graph_params or {}
         self.cuda_graph_enabled = bool(cuda_graph_enabled)
         self.torch_compile_params = torch_compile_params or {}
@@ -343,12 +345,28 @@ class FastWAMModelAdapter(NativeModelAdapter):
             "text_cfg_scale": float(self._evaluation_value("text_cfg_scale", 1.0)),
             "num_inference_steps": self._num_inference_steps(request),
             "proprio": model_inputs["proprio"],
-            "sigma_shift": _optional_float(self._evaluation_value("sigma_shift", None)),
+            "sigma_shift": self._sigma_shift(request),
             "seed": _optional_int(self._config_value("seed", None)),
             "rand_device": str(self._evaluation_value("rand_device", "cpu")),
             "tiled": bool(self._evaluation_value("tiled", False)),
             "cache_mode": cache_mode,
         }
+        scheduler_name = self._scheduler_name(request)
+        schedule_type = self._schedule_type(request)
+        if self._infer_action_accepts("scheduler_name"):
+            infer_kwargs["scheduler_name"] = scheduler_name
+        if self._infer_action_accepts("schedule_type"):
+            infer_kwargs["schedule_type"] = schedule_type
+        timesteps = self._scheduler_timesteps(request)
+        sigmas = self._scheduler_sigmas(request)
+        if timesteps is not None:
+            if not self._infer_action_accepts("timesteps"):
+                raise self.error_cls("loaded FastWAM model does not accept custom scheduler timesteps")
+            infer_kwargs["timesteps"] = timesteps
+        if sigmas is not None:
+            if not self._infer_action_accepts("sigmas"):
+                raise self.error_cls("loaded FastWAM model does not accept custom scheduler sigmas")
+            infer_kwargs["sigmas"] = sigmas
         teacache_mode = force_teacache_mode or self._teacache_mode(request)
         cuda_graph_mode = force_cuda_graph_mode or self._cuda_graph_mode(request)
         if (
@@ -431,6 +449,7 @@ class FastWAMModelAdapter(NativeModelAdapter):
             "teacache_hook": "fastwam_teacache_action_step_output",
             **teacache_settings,
             "teacache_fallback_reason": teacache_fallback_reason,
+            "scheduler_profile_enabled": bool(self.scheduler_params),
         }
         if isinstance(raw_output, dict) and isinstance(raw_output.get("metadata"), dict):
             metadata.update(raw_output["metadata"])
@@ -441,6 +460,8 @@ class FastWAMModelAdapter(NativeModelAdapter):
         first_signature = (
             int(first.action_horizon),
             self._num_inference_steps(first),
+            self._scheduler_timesteps(first),
+            self._scheduler_sigmas(first),
             self._dit_cache_mode(first),
             self._torch_compile_mode(first),
             self._teacache_mode(first),
@@ -449,6 +470,8 @@ class FastWAMModelAdapter(NativeModelAdapter):
             signature = (
                 int(request.action_horizon),
                 self._num_inference_steps(request),
+                self._scheduler_timesteps(request),
+                self._scheduler_sigmas(request),
                 self._dit_cache_mode(request),
                 self._torch_compile_mode(request),
                 self._teacache_mode(request),
@@ -469,6 +492,8 @@ class FastWAMModelAdapter(NativeModelAdapter):
             "proprio": _shape_list(proprio),
             "action_horizon": int(request.action_horizon),
             "num_inference_steps": self._num_inference_steps(request),
+            "timesteps": self._scheduler_timesteps(request),
+            "sigmas": self._scheduler_sigmas(request),
             "cache_mode": self._dit_cache_mode(request),
             "torch_compile_mode": self._torch_compile_mode(request),
             "teacache_mode": self._teacache_mode(request),
@@ -477,10 +502,43 @@ class FastWAMModelAdapter(NativeModelAdapter):
     def _num_inference_steps(self, request: InferenceRequest) -> int:
         if "num_inference_steps" in request.runtime_options:
             return int(request.runtime_options["num_inference_steps"])
+        configured = self.scheduler_params.get("num_inference_steps")
+        if configured is not None:
+            return int(configured)
         configured = self._evaluation_value("num_inference_steps", None)
         if configured is not None:
             return int(configured)
         return int(self._config_value("eval_num_inference_steps", 20))
+
+    def _sigma_shift(self, request: InferenceRequest) -> float | None:
+        if "sigma_shift" in request.runtime_options:
+            return _optional_scheduler_float(request.runtime_options["sigma_shift"])
+        configured = self.scheduler_params.get("sigma_shift")
+        if configured is not None:
+            return _optional_scheduler_float(configured)
+        return _optional_scheduler_float(self._evaluation_value("sigma_shift", None))
+
+    def _scheduler_name(self, request: InferenceRequest) -> str:
+        configured = request.runtime_options.get("scheduler_name")
+        if configured is None:
+            configured = self.scheduler_params.get("scheduler_name")
+        return str(configured or "fastwam_flowmatch_euler")
+
+    def _schedule_type(self, request: InferenceRequest) -> str:
+        configured = request.runtime_options.get("schedule_type")
+        if configured is None:
+            configured = self.scheduler_params.get("schedule_type")
+        return str(configured or "shifted_flowmatch")
+
+    def _scheduler_timesteps(self, request: InferenceRequest) -> object | None:
+        if "timesteps" in request.runtime_options:
+            return request.runtime_options["timesteps"]
+        return self.scheduler_params.get("timesteps")
+
+    def _scheduler_sigmas(self, request: InferenceRequest) -> object | None:
+        if "sigmas" in request.runtime_options:
+            return request.runtime_options["sigmas"]
+        return self.scheduler_params.get("sigmas")
 
     def _num_video_frames(self) -> int:
         if self.cfg is None:
@@ -612,12 +670,14 @@ class FastWAMBackend(NativeBackendBase):
     model_adapter_name = FastWAMModelAdapter.name
     optimization_hooks: ClassVar[dict[str, str]] = {
         **NativeBackendBase.optimization_hooks,
+        "scheduler": "fastwam_flowmatch_euler_scheduler",
         "dit_cache": "fastwam_video_kv_cache",
         "cuda_graph": "fastwam_cuda_graph_action_body",
         "torch_compile": "fastwam_torch_compile_action_body",
         "teacache": "fastwam_teacache_action_step_output",
     }
     loaded_optimization_hooks: ClassVar[dict[str, str]] = {
+        "scheduler": "fastwam_flowmatch_euler_scheduler",
         "dit_cache": "fastwam_video_kv_cache",
         "cuda_graph": "fastwam_cuda_graph_action_body",
         "torch_compile": "fastwam_torch_compile_action_body",
@@ -763,6 +823,7 @@ class FastWAMBackend(NativeBackendBase):
             dataset_stats_path=self.dataset_stats_path,
             config=dict(self.config),
             dit_cache_params=self.profile_settings("dit_cache"),
+            scheduler_params=self.profile_settings("scheduler"),
             cuda_graph_params=self.profile_settings("cuda_graph"),
             cuda_graph_enabled=self.profile_enabled("cuda_graph"),
             torch_compile_params=self.profile_settings("torch_compile"),
@@ -834,6 +895,16 @@ class FastWAMBackend(NativeBackendBase):
                 "state": "fallback",
                 "hook": "fastwam_torch_compile_action_body",
                 "reason": "torch_compile_hook_unavailable",
+            }
+
+        if profile.name == "scheduler":
+            if self._scheduler_hook_available():
+                return status
+            return {
+                **status,
+                "state": "fallback",
+                "hook": "fastwam_flowmatch_euler_scheduler",
+                "reason": "scheduler_hook_unavailable",
             }
 
         if profile.name == "teacache":
@@ -916,6 +987,28 @@ class FastWAMBackend(NativeBackendBase):
         return "teacache_mode" in signature.parameters or any(
             parameter.kind is inspect.Parameter.VAR_KEYWORD
             for parameter in signature.parameters.values()
+        )
+
+    def _scheduler_hook_available(self) -> bool:
+        infer_action = getattr(self.model, "infer_action", None)
+        if not callable(infer_action):
+            return False
+        try:
+            signature = inspect.signature(infer_action)
+        except (TypeError, ValueError):
+            return False
+        parameters = signature.parameters
+        has_var_kwargs = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        )
+        if has_var_kwargs:
+            return True
+        return (
+            "num_inference_steps" in parameters
+            and "sigma_shift" in parameters
+            and "scheduler_name" in parameters
+            and "schedule_type" in parameters
         )
 
     def inspect_upstream_repo(
@@ -1144,6 +1237,12 @@ def _shape_list(value: object) -> list[int] | None:
         return [int(dim) for dim in shape]
     except TypeError:
         return None
+
+
+def _optional_scheduler_float(value: object) -> float | None:
+    if isinstance(value, str) and value.strip().lower() in {"", "none", "null"}:
+        return None
+    return _optional_float(value)
 
 
 def _normalize_cuda_graph_mode(value: object) -> str:

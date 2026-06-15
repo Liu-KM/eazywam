@@ -388,6 +388,7 @@ def test_runner_maps_reference_entry_to_native_input_observation(tmp_path) -> No
     assert contract["model_adapter"] == "test_native_run_adapter"
     assert contract["supported_optimizations"] == [
         "action_chunk_scheduling",
+        "scheduler",
         "dit_cache",
         "cuda_graph",
         "torch_compile",
