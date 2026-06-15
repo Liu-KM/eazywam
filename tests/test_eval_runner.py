@@ -97,6 +97,9 @@ def test_libero_runtime_options_include_acceleration_modes(tmp_path) -> None:
             "dit_cache_mode": "video_kv",
             "cuda_graph_mode": "off",
             "torch_compile_mode": "auto",
+            "teacache_mode": "auto",
+            "teacache_threshold": "0.05",
+            "teacache_warmup_steps": "1",
         },
     )
 
@@ -105,6 +108,9 @@ def test_libero_runtime_options_include_acceleration_modes(tmp_path) -> None:
         "dit_cache_mode": "video_kv",
         "cuda_graph_mode": "off",
         "torch_compile_mode": "auto",
+        "teacache_mode": "auto",
+        "teacache_threshold": "0.05",
+        "teacache_warmup_steps": "1",
     }
 
 
@@ -128,6 +134,9 @@ def test_robotwin_runtime_options_include_acceleration_modes(tmp_path) -> None:
             "dit_cache_mode": "video_kv",
             "cuda_graph_mode": "off",
             "torch_compile_mode": "auto",
+            "teacache_mode": "auto",
+            "teacache_threshold": "0.05",
+            "teacache_warmup_steps": "1",
         },
     )
 
@@ -136,6 +145,9 @@ def test_robotwin_runtime_options_include_acceleration_modes(tmp_path) -> None:
         "dit_cache_mode": "video_kv",
         "cuda_graph_mode": "off",
         "torch_compile_mode": "auto",
+        "teacache_mode": "auto",
+        "teacache_threshold": "0.05",
+        "teacache_warmup_steps": "1",
     }
 
 

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import subprocess
 
@@ -78,7 +79,13 @@ def test_fastwam_dockerfile_reuses_native_setup_script() -> None:
     assert "ENV PYOPENGL_PLATFORM=egl" in content
     assert "ENV WAM_FASTWAM_REPO" not in content
     assert "COPY scripts/setup_fastwam_native_env.sh" in content
+    assert "COPY scripts/fastwam-teacache-l1-superpod.sh" in content
+    assert "COPY scripts/fastwam-teacache-l1-report.py" in content
     assert "./scripts/setup_fastwam_native_env.sh" in content
+    assert "./scripts/fastwam-teacache-l1-superpod.sh" in content
+    assert "./scripts/fastwam-teacache-l1-report.py" in content
+    assert "wam-fastwam-teacache-l1-superpod" in content
+    assert "wam-fastwam-teacache-l1-report" in content
     assert "--harness-dir /workspace/eazywam" in content
     assert "--clone" in content
 
@@ -120,6 +127,793 @@ def test_fastwam_libero_eval_acceptance_script_checks_simulator_env() -> None:
     assert "python -m eazywam.evals.acceptance" in content
     assert "python -m eazywam.evals.acceptance --json" in content
     assert '"$min_success_rate"' in content
+
+
+def test_fastwam_teacache_l1_superpod_script_is_scheduler_agnostic() -> None:
+    script_path = ROOT / "scripts/fastwam-teacache-l1-superpod.sh"
+    content = script_path.read_text(encoding="utf-8")
+
+    subprocess.run(["bash", "-n", str(script_path)], check=True)
+    assert "--execute" in content
+    assert "--cache-dir" in content
+    assert "--robotwin-root" in content
+    assert "--run-id" in content
+    assert 'trace_run_root="$trace_root/$run_id"' in content
+    assert 'report_run_root="$report_root/$run_id"' in content
+    assert 'cache_args=(--cache-dir "$cache_dir")' in content
+    assert 'upstream_args=(--upstream-dir "$upstream_dir")' in content
+    assert 'robotwin_root_args=(--set "robotwin_root=$robotwin_root")' in content
+    assert "Slurm/PBS/LSF" in content
+    assert "sbatch" not in content
+    assert "wam eval fastwam-libero" in content
+    assert "wam eval fastwam-robotwin" in content
+    assert "--opt teacache" in content
+    assert "--set dit_cache_mode=video_kv" in content
+    assert "--set cuda_graph_mode=off" in content
+    assert "teacache_threshold" in content
+    assert "teacache_warmup_steps" in content
+    assert "wam compare" in content
+    assert "latest_trace" in content
+    assert "run_report" in content
+    assert "fastwam-teacache-l1-report.md" in content
+    assert "fastwam-teacache-l1-report.json" in content
+    assert "fastwam-libero-teacache-compare.json" in content
+    assert "fastwam-robotwin-teacache-compare.json" in content
+
+
+def test_fastwam_teacache_l1_superpod_script_passes_cache_dir() -> None:
+    script_path = ROOT / "scripts/fastwam-teacache-l1-superpod.sh"
+
+    result = subprocess.run(
+        [
+            str(script_path),
+            "--cache-dir",
+            "/mnt/wam-cache",
+            "--run-id",
+            "test-run",
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.stdout.count("--cache-dir /mnt/wam-cache") == 4
+    assert "runs/fastwam-teacache-l1/test-run/fastwam-libero-eager-cache" in result.stdout
+    assert "runs/fastwam-teacache-l1-reports/test-run/fastwam-libero-eager-cache-summary.json" in result.stdout
+    assert "runs/fastwam-teacache-l1-reports/test-run/fastwam-teacache-l1-report.md" in result.stdout
+    assert "runs/fastwam-teacache-l1-reports/test-run/fastwam-teacache-l1-report.json" in result.stdout
+    assert "+ wam compare" in result.stdout
+    assert "+ " in result.stdout
+    assert "fastwam-teacache-l1-report.py --report-root" in result.stdout
+    assert "fastwam-teacache-l1-report.py --report-root runs/fastwam-teacache-l1-reports/test-run --json" in result.stdout
+
+
+def test_fastwam_teacache_l1_superpod_script_passes_upstream_dir() -> None:
+    script_path = ROOT / "scripts/fastwam-teacache-l1-superpod.sh"
+
+    result = subprocess.run(
+        [
+            str(script_path),
+            "--upstream-dir",
+            "/mnt/FastWAM",
+            "--run-id",
+            "test-run",
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.stdout.count("--upstream-dir /mnt/FastWAM") == 4
+
+
+def test_fastwam_teacache_l1_superpod_script_passes_robotwin_root() -> None:
+    script_path = ROOT / "scripts/fastwam-teacache-l1-superpod.sh"
+
+    result = subprocess.run(
+        [
+            str(script_path),
+            "--robotwin-root",
+            "/mnt/RoboTwin",
+            "--run-id",
+            "test-run",
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.stdout.count("--set robotwin_root=/mnt/RoboTwin") == 2
+    assert "fastwam-libero-eager-cache" in result.stdout
+    assert "fastwam-robotwin-eager-cache" in result.stdout
+
+
+def test_fastwam_teacache_l1_superpod_script_resolves_symlinked_report_helper(
+    tmp_path,
+) -> None:
+    script_path = ROOT / "scripts/fastwam-teacache-l1-superpod.sh"
+    link_path = tmp_path / "wam-fastwam-teacache-l1-superpod"
+    link_path.symlink_to(script_path)
+
+    result = subprocess.run(
+        [
+            str(link_path),
+            "--run-id",
+            "symlink-run",
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    assert (
+        f"+ {ROOT / 'scripts/fastwam-teacache-l1-report.py'} --report-root "
+        "runs/fastwam-teacache-l1-reports/symlink-run"
+    ) in result.stdout
+    assert (
+        f"+ {ROOT / 'scripts/fastwam-teacache-l1-report.py'} --report-root "
+        "runs/fastwam-teacache-l1-reports/symlink-run --json"
+    ) in result.stdout
+    assert f"{tmp_path}/fastwam-teacache-l1-report.py" not in result.stdout
+
+
+def test_fastwam_teacache_l1_report_script_extracts_markdown_rows(tmp_path) -> None:
+    script_path = ROOT / "scripts/fastwam-teacache-l1-report.py"
+    report_root = tmp_path / "reports"
+    report_root.mkdir()
+    compare_payload = {
+        "decision": "faster",
+        "output_gate_passed": True,
+        "output_gate_details": {"observed": {"mean": 0.0004, "max": 0.0008}},
+        "metric_comparisons": {
+            "latency_ms.mean": {"speedup": 1.5},
+            "backend_metadata.denoise_wall_ms.mean": {"speedup": 2.0},
+        },
+        "baseline": {"profiles": []},
+        "variant": {
+            "profiles": ["teacache"],
+            "backend_metadata": {
+                "teacache_hit_rate": {"mean": 0.6},
+                "teacache_skipped_steps": {"mean": 6.0},
+                "teacache_drift_score": {"mean": 0.02},
+            },
+        },
+    }
+    libero_baseline = {"metrics": {"success_rate": 0.8}}
+    libero_variant = {"metrics": {"success_rate": 1.0}}
+    robotwin_baseline = {
+        "metrics": {
+            "overall": {
+                "clean_mean_success_rate": 0.7,
+                "random_mean_success_rate": 0.6,
+            }
+        },
+    }
+    robotwin_variant = {
+        "metrics": {
+            "overall": {
+                "clean_mean_success_rate": 0.9,
+                "random_mean_success_rate": 0.8,
+            }
+        },
+    }
+    (report_root / "fastwam-libero-teacache-compare.json").write_text(
+        json.dumps(compare_payload),
+        encoding="utf-8",
+    )
+    (report_root / "fastwam-robotwin-teacache-compare.json").write_text(
+        json.dumps(compare_payload),
+        encoding="utf-8",
+    )
+    (report_root / "fastwam-libero-eager-cache-summary.json").write_text(
+        json.dumps(libero_baseline),
+        encoding="utf-8",
+    )
+    (report_root / "fastwam-libero-teacache-summary.json").write_text(
+        json.dumps(libero_variant),
+        encoding="utf-8",
+    )
+    (report_root / "fastwam-robotwin-eager-cache-summary.json").write_text(
+        json.dumps(robotwin_baseline),
+        encoding="utf-8",
+    )
+    (report_root / "fastwam-robotwin-teacache-summary.json").write_text(
+        json.dumps(robotwin_variant),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["python", "-m", "py_compile", str(script_path)], check=True)
+    result = subprocess.run(
+        [str(script_path), "--report-root", str(report_root)],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    assert "| LIBERO | 1.5 | 2 | 0.6 | 6 | 0.02 | 0.0008 | 0.8 | 1 | TODO |" in result.stdout
+    assert "| RoboTwin | 1.5 | 2 | 0.6 | 6 | 0.02 | 0.0008 | 0.6 | 0.8 | TODO |" in result.stdout
+    assert "speedup blocked:" not in result.stdout
+
+
+def test_fastwam_teacache_l1_report_script_hides_invalid_speedups(tmp_path) -> None:
+    script_path = ROOT / "scripts/fastwam-teacache-l1-report.py"
+    report_root = tmp_path / "reports"
+    report_root.mkdir()
+    compare_payload = {
+        "decision": "invalid",
+        "output_gate_passed": False,
+        "output_gate_details": {"observed": {"max": 0.01}},
+        "metric_comparisons": {
+            "latency_ms.mean": {"speedup": 1.5},
+            "backend_metadata.denoise_wall_ms.mean": {"speedup": 2.0},
+        },
+        "baseline": {"profiles": []},
+        "variant": {
+            "profiles": ["teacache"],
+            "backend_metadata": {
+                "teacache_hit_rate": {"mean": 0.6},
+                "teacache_skipped_steps": {"mean": 6.0},
+                "teacache_drift_score": {"mean": 0.02},
+            },
+        },
+    }
+    summary_payload = {"metrics": {"success_rate": 0.8}}
+    for name in (
+        "fastwam-libero-teacache-compare.json",
+        "fastwam-robotwin-teacache-compare.json",
+    ):
+        (report_root / name).write_text(json.dumps(compare_payload), encoding="utf-8")
+    for name in (
+        "fastwam-libero-eager-cache-summary.json",
+        "fastwam-libero-teacache-summary.json",
+        "fastwam-robotwin-eager-cache-summary.json",
+        "fastwam-robotwin-teacache-summary.json",
+    ):
+        (report_root / name).write_text(json.dumps(summary_payload), encoding="utf-8")
+
+    result = subprocess.run(
+        [str(script_path), "--report-root", str(report_root), "--json"],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    rows = json.loads(result.stdout)
+
+    assert rows[0]["latency_mean_speedup"] == 1.5
+    assert rows[0]["denoise_mean_speedup"] == 2.0
+    assert rows[0]["latency_mean_speedup_reportable"] is None
+    assert rows[0]["denoise_mean_speedup_reportable"] is None
+    assert rows[0]["hit_rate"] == 0.6
+    assert rows[0]["speedup_reportable"] is False
+    assert rows[0]["speedup_blockers"] == [
+        "compare_decision:invalid",
+        "output_gate_not_passed",
+    ]
+
+    markdown = subprocess.run(
+        [str(script_path), "--report-root", str(report_root)],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    assert (
+        "- LIBERO speedup blocked: compare_decision:invalid, output_gate_not_passed"
+        in markdown.stdout
+    )
+
+
+def test_fastwam_teacache_l1_report_script_hides_unavailable_gate_speedups(
+    tmp_path,
+) -> None:
+    script_path = ROOT / "scripts/fastwam-teacache-l1-report.py"
+    report_root = tmp_path / "reports"
+    report_root.mkdir()
+    compare_payload = {
+        "decision": "not_comparable",
+        "output_gate_passed": None,
+        "metric_comparisons": {
+            "latency_ms.mean": {"speedup": 1.5},
+            "backend_metadata.denoise_wall_ms.mean": {"speedup": 2.0},
+        },
+        "baseline": {"profiles": []},
+        "variant": {
+            "profiles": ["teacache"],
+            "backend_metadata": {
+                "teacache_hit_rate": {"mean": 0.6},
+                "teacache_skipped_steps": {"mean": 6.0},
+                "teacache_drift_score": {"mean": 0.02},
+            },
+        },
+    }
+    summary_payload = {"metrics": {"success_rate": 0.8}}
+    for name in (
+        "fastwam-libero-teacache-compare.json",
+        "fastwam-robotwin-teacache-compare.json",
+    ):
+        (report_root / name).write_text(json.dumps(compare_payload), encoding="utf-8")
+    for name in (
+        "fastwam-libero-eager-cache-summary.json",
+        "fastwam-libero-teacache-summary.json",
+        "fastwam-robotwin-eager-cache-summary.json",
+        "fastwam-robotwin-teacache-summary.json",
+    ):
+        (report_root / name).write_text(json.dumps(summary_payload), encoding="utf-8")
+
+    result = subprocess.run(
+        [str(script_path), "--report-root", str(report_root), "--json"],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    rows = json.loads(result.stdout)
+
+    assert rows[0]["latency_mean_speedup"] == 1.5
+    assert rows[0]["denoise_mean_speedup"] == 2.0
+    assert rows[0]["latency_mean_speedup_reportable"] is None
+    assert rows[0]["denoise_mean_speedup_reportable"] is None
+    assert rows[0]["compare_decision"] == "not_comparable"
+    assert rows[0]["output_gate_passed"] is None
+    assert rows[0]["speedup_reportable"] is False
+    assert rows[0]["speedup_blockers"] == [
+        "compare_decision:not_comparable",
+        "output_gate_not_passed",
+        "action_drift_missing",
+    ]
+
+
+def test_fastwam_teacache_l1_report_script_hides_non_faster_decisions(
+    tmp_path,
+) -> None:
+    script_path = ROOT / "scripts/fastwam-teacache-l1-report.py"
+    report_root = tmp_path / "reports"
+    report_root.mkdir()
+    compare_payload = {
+        "decision": "same",
+        "output_gate_passed": True,
+        "output_gate_details": {"observed": {"max": 0.0008}},
+        "metric_comparisons": {
+            "latency_ms.mean": {"speedup": 1.01},
+            "backend_metadata.denoise_wall_ms.mean": {"speedup": 1.02},
+        },
+        "baseline": {"profiles": []},
+        "variant": {
+            "profiles": ["teacache"],
+            "backend_metadata": {
+                "teacache_hit_rate": {"mean": 0.6},
+                "teacache_skipped_steps": {"mean": 6.0},
+                "teacache_drift_score": {"mean": 0.02},
+            },
+        },
+    }
+    summary_payload = {"metrics": {"success_rate": 0.8}}
+    for name in (
+        "fastwam-libero-teacache-compare.json",
+        "fastwam-robotwin-teacache-compare.json",
+    ):
+        (report_root / name).write_text(json.dumps(compare_payload), encoding="utf-8")
+    for name in (
+        "fastwam-libero-eager-cache-summary.json",
+        "fastwam-libero-teacache-summary.json",
+        "fastwam-robotwin-eager-cache-summary.json",
+        "fastwam-robotwin-teacache-summary.json",
+    ):
+        (report_root / name).write_text(json.dumps(summary_payload), encoding="utf-8")
+
+    result = subprocess.run(
+        [str(script_path), "--report-root", str(report_root), "--json"],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    rows = json.loads(result.stdout)
+
+    assert rows[0]["latency_mean_speedup"] == 1.01
+    assert rows[0]["denoise_mean_speedup"] == 1.02
+    assert rows[0]["latency_mean_speedup_reportable"] is None
+    assert rows[0]["denoise_mean_speedup_reportable"] is None
+    assert rows[0]["speedup_reportable"] is False
+    assert rows[0]["speedup_blockers"] == ["compare_decision:same"]
+
+
+def test_fastwam_teacache_l1_report_script_hides_fallback_speedups(tmp_path) -> None:
+    script_path = ROOT / "scripts/fastwam-teacache-l1-report.py"
+    report_root = tmp_path / "reports"
+    report_root.mkdir()
+    compare_payload = {
+        "decision": "faster",
+        "output_gate_passed": True,
+        "output_gate_details": {"observed": {"max": 0.0008}},
+        "metric_comparisons": {
+            "latency_ms.mean": {"speedup": 1.5},
+            "backend_metadata.denoise_wall_ms.mean": {"speedup": 2.0},
+        },
+        "baseline": {"profiles": []},
+        "variant": {
+            "profiles": ["teacache"],
+            "backend_metadata": {
+                "teacache_hit_rate": {"mean": 0.6},
+                "teacache_skipped_steps": {"mean": 6.0},
+                "teacache_drift_score": {"mean": 0.02},
+            },
+            "backend_metadata_values": {
+                "teacache_fallback_reason": {
+                    "values": ["requires_video_kv_cache"],
+                },
+            },
+        },
+    }
+    summary_payload = {"metrics": {"success_rate": 0.8}}
+    for name in (
+        "fastwam-libero-teacache-compare.json",
+        "fastwam-robotwin-teacache-compare.json",
+    ):
+        (report_root / name).write_text(json.dumps(compare_payload), encoding="utf-8")
+    for name in (
+        "fastwam-libero-eager-cache-summary.json",
+        "fastwam-libero-teacache-summary.json",
+        "fastwam-robotwin-eager-cache-summary.json",
+        "fastwam-robotwin-teacache-summary.json",
+    ):
+        (report_root / name).write_text(json.dumps(summary_payload), encoding="utf-8")
+
+    result = subprocess.run(
+        [str(script_path), "--report-root", str(report_root), "--json"],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    rows = json.loads(result.stdout)
+
+    assert rows[0]["latency_mean_speedup"] == 1.5
+    assert rows[0]["denoise_mean_speedup"] == 2.0
+    assert rows[0]["latency_mean_speedup_reportable"] is None
+    assert rows[0]["denoise_mean_speedup_reportable"] is None
+    assert rows[0]["fallback_reason"] == "requires_video_kv_cache"
+    assert rows[0]["speedup_reportable"] is False
+    assert rows[0]["speedup_blockers"] == ["teacache_fallback_reason"]
+
+
+def test_fastwam_teacache_l1_report_script_hides_speedups_without_success_rate(
+    tmp_path,
+) -> None:
+    script_path = ROOT / "scripts/fastwam-teacache-l1-report.py"
+    report_root = tmp_path / "reports"
+    report_root.mkdir()
+    compare_payload = {
+        "decision": "faster",
+        "output_gate_passed": True,
+        "output_gate_details": {"observed": {"max": 0.0008}},
+        "metric_comparisons": {
+            "latency_ms.mean": {"speedup": 1.5},
+            "backend_metadata.denoise_wall_ms.mean": {"speedup": 2.0},
+        },
+        "baseline": {"profiles": []},
+        "variant": {
+            "profiles": ["teacache"],
+            "backend_metadata": {
+                "teacache_hit_rate": {"mean": 0.6},
+                "teacache_skipped_steps": {"mean": 6.0},
+                "teacache_drift_score": {"mean": 0.02},
+            },
+        },
+    }
+    summary_payload = {"metrics": {"total_episodes": 5}}
+    for name in (
+        "fastwam-libero-teacache-compare.json",
+        "fastwam-robotwin-teacache-compare.json",
+    ):
+        (report_root / name).write_text(json.dumps(compare_payload), encoding="utf-8")
+    for name in (
+        "fastwam-libero-eager-cache-summary.json",
+        "fastwam-libero-teacache-summary.json",
+        "fastwam-robotwin-eager-cache-summary.json",
+        "fastwam-robotwin-teacache-summary.json",
+    ):
+        (report_root / name).write_text(json.dumps(summary_payload), encoding="utf-8")
+
+    result = subprocess.run(
+        [str(script_path), "--report-root", str(report_root), "--json"],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    rows = json.loads(result.stdout)
+
+    assert rows[0]["latency_mean_speedup"] == 1.5
+    assert rows[0]["denoise_mean_speedup"] == 2.0
+    assert rows[0]["latency_mean_speedup_reportable"] is None
+    assert rows[0]["denoise_mean_speedup_reportable"] is None
+    assert rows[0]["success_rate_baseline"] is None
+    assert rows[0]["success_rate_teacache"] is None
+    assert rows[0]["speedup_reportable"] is False
+    assert rows[0]["speedup_blockers"] == [
+        "baseline_success_rate_missing",
+        "teacache_success_rate_missing",
+    ]
+
+
+def test_fastwam_teacache_l1_report_script_hides_speedups_when_success_rate_drops(
+    tmp_path,
+) -> None:
+    script_path = ROOT / "scripts/fastwam-teacache-l1-report.py"
+    report_root = tmp_path / "reports"
+    report_root.mkdir()
+    compare_payload = {
+        "decision": "faster",
+        "output_gate_passed": True,
+        "output_gate_details": {"observed": {"max": 0.0008}},
+        "metric_comparisons": {
+            "latency_ms.mean": {"speedup": 1.5},
+            "backend_metadata.denoise_wall_ms.mean": {"speedup": 2.0},
+        },
+        "baseline": {"profiles": []},
+        "variant": {
+            "profiles": ["teacache"],
+            "backend_metadata": {
+                "teacache_hit_rate": {"mean": 0.6},
+                "teacache_skipped_steps": {"mean": 6.0},
+                "teacache_drift_score": {"mean": 0.02},
+            },
+        },
+    }
+    baseline_summary = {"metrics": {"success_rate": 0.9}}
+    variant_summary = {"metrics": {"success_rate": 0.8}}
+    for name in (
+        "fastwam-libero-teacache-compare.json",
+        "fastwam-robotwin-teacache-compare.json",
+    ):
+        (report_root / name).write_text(json.dumps(compare_payload), encoding="utf-8")
+    for name in (
+        "fastwam-libero-eager-cache-summary.json",
+        "fastwam-robotwin-eager-cache-summary.json",
+    ):
+        (report_root / name).write_text(json.dumps(baseline_summary), encoding="utf-8")
+    for name in (
+        "fastwam-libero-teacache-summary.json",
+        "fastwam-robotwin-teacache-summary.json",
+    ):
+        (report_root / name).write_text(json.dumps(variant_summary), encoding="utf-8")
+
+    result = subprocess.run(
+        [str(script_path), "--report-root", str(report_root), "--json"],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    rows = json.loads(result.stdout)
+
+    assert rows[0]["latency_mean_speedup"] == 1.5
+    assert rows[0]["denoise_mean_speedup"] == 2.0
+    assert rows[0]["latency_mean_speedup_reportable"] is None
+    assert rows[0]["denoise_mean_speedup_reportable"] is None
+    assert rows[0]["success_rate_baseline"] == 0.9
+    assert rows[0]["success_rate_teacache"] == 0.8
+    assert rows[0]["speedup_reportable"] is False
+    assert rows[0]["speedup_blockers"] == ["success_rate_drop"]
+
+
+def test_fastwam_teacache_l1_report_script_hides_profile_mismatch_speedups(
+    tmp_path,
+) -> None:
+    script_path = ROOT / "scripts/fastwam-teacache-l1-report.py"
+    report_root = tmp_path / "reports"
+    report_root.mkdir()
+    compare_payload = {
+        "decision": "faster",
+        "output_gate_passed": True,
+        "output_gate_details": {"observed": {"max": 0.0008}},
+        "metric_comparisons": {
+            "latency_ms.mean": {"speedup": 1.5},
+            "backend_metadata.denoise_wall_ms.mean": {"speedup": 2.0},
+        },
+        "baseline": {"profiles": ["teacache"]},
+        "variant": {
+            "profiles": [],
+            "backend_metadata": {
+                "teacache_hit_rate": {"mean": 0.6},
+                "teacache_skipped_steps": {"mean": 6.0},
+                "teacache_drift_score": {"mean": 0.02},
+            },
+        },
+    }
+    summary_payload = {"metrics": {"success_rate": 0.8}}
+    for name in (
+        "fastwam-libero-teacache-compare.json",
+        "fastwam-robotwin-teacache-compare.json",
+    ):
+        (report_root / name).write_text(json.dumps(compare_payload), encoding="utf-8")
+    for name in (
+        "fastwam-libero-eager-cache-summary.json",
+        "fastwam-libero-teacache-summary.json",
+        "fastwam-robotwin-eager-cache-summary.json",
+        "fastwam-robotwin-teacache-summary.json",
+    ):
+        (report_root / name).write_text(json.dumps(summary_payload), encoding="utf-8")
+
+    result = subprocess.run(
+        [str(script_path), "--report-root", str(report_root), "--json"],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    rows = json.loads(result.stdout)
+
+    assert rows[0]["latency_mean_speedup"] == 1.5
+    assert rows[0]["denoise_mean_speedup"] == 2.0
+    assert rows[0]["latency_mean_speedup_reportable"] is None
+    assert rows[0]["denoise_mean_speedup_reportable"] is None
+    assert rows[0]["speedup_blockers"] == [
+        "baseline_has_teacache_profile",
+        "variant_missing_teacache_profile",
+    ]
+
+
+def test_fastwam_teacache_l1_report_script_hides_missing_profile_speedups(
+    tmp_path,
+) -> None:
+    script_path = ROOT / "scripts/fastwam-teacache-l1-report.py"
+    report_root = tmp_path / "reports"
+    report_root.mkdir()
+    compare_payload = {
+        "decision": "faster",
+        "output_gate_passed": True,
+        "output_gate_details": {"observed": {"max": 0.0008}},
+        "metric_comparisons": {
+            "latency_ms.mean": {"speedup": 1.5},
+            "backend_metadata.denoise_wall_ms.mean": {"speedup": 2.0},
+        },
+        "baseline": {},
+        "variant": {
+            "backend_metadata": {
+                "teacache_hit_rate": {"mean": 0.6},
+                "teacache_skipped_steps": {"mean": 6.0},
+                "teacache_drift_score": {"mean": 0.02},
+            },
+        },
+    }
+    summary_payload = {"metrics": {"success_rate": 0.8}}
+    for name in (
+        "fastwam-libero-teacache-compare.json",
+        "fastwam-robotwin-teacache-compare.json",
+    ):
+        (report_root / name).write_text(json.dumps(compare_payload), encoding="utf-8")
+    for name in (
+        "fastwam-libero-eager-cache-summary.json",
+        "fastwam-libero-teacache-summary.json",
+        "fastwam-robotwin-eager-cache-summary.json",
+        "fastwam-robotwin-teacache-summary.json",
+    ):
+        (report_root / name).write_text(json.dumps(summary_payload), encoding="utf-8")
+
+    result = subprocess.run(
+        [str(script_path), "--report-root", str(report_root), "--json"],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    rows = json.loads(result.stdout)
+
+    assert rows[0]["latency_mean_speedup"] == 1.5
+    assert rows[0]["denoise_mean_speedup"] == 2.0
+    assert rows[0]["latency_mean_speedup_reportable"] is None
+    assert rows[0]["denoise_mean_speedup_reportable"] is None
+    assert rows[0]["speedup_blockers"] == [
+        "baseline_profiles_missing",
+        "variant_profiles_missing",
+    ]
+
+
+def test_fastwam_teacache_l1_report_script_hides_missing_telemetry_speedups(
+    tmp_path,
+) -> None:
+    script_path = ROOT / "scripts/fastwam-teacache-l1-report.py"
+    report_root = tmp_path / "reports"
+    report_root.mkdir()
+    compare_payload = {
+        "decision": "faster",
+        "output_gate_passed": True,
+        "output_gate_details": {"observed": {"max": 0.0008}},
+        "metric_comparisons": {
+            "latency_ms.mean": {"speedup": 1.5},
+            "backend_metadata.denoise_wall_ms.mean": {"speedup": 2.0},
+        },
+        "baseline": {"profiles": []},
+        "variant": {
+            "profiles": ["teacache"],
+            "backend_metadata": {
+                "teacache_hit_rate": {"mean": 0.6},
+            },
+        },
+    }
+    summary_payload = {"metrics": {"success_rate": 0.8}}
+    for name in (
+        "fastwam-libero-teacache-compare.json",
+        "fastwam-robotwin-teacache-compare.json",
+    ):
+        (report_root / name).write_text(json.dumps(compare_payload), encoding="utf-8")
+    for name in (
+        "fastwam-libero-eager-cache-summary.json",
+        "fastwam-libero-teacache-summary.json",
+        "fastwam-robotwin-eager-cache-summary.json",
+        "fastwam-robotwin-teacache-summary.json",
+    ):
+        (report_root / name).write_text(json.dumps(summary_payload), encoding="utf-8")
+
+    result = subprocess.run(
+        [str(script_path), "--report-root", str(report_root), "--json"],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    rows = json.loads(result.stdout)
+
+    assert rows[0]["latency_mean_speedup"] == 1.5
+    assert rows[0]["denoise_mean_speedup"] == 2.0
+    assert rows[0]["latency_mean_speedup_reportable"] is None
+    assert rows[0]["denoise_mean_speedup_reportable"] is None
+    assert rows[0]["hit_rate"] == 0.6
+    assert rows[0]["skipped_steps"] is None
+    assert rows[0]["drift_score"] is None
+    assert rows[0]["speedup_reportable"] is False
+    assert rows[0]["speedup_blockers"] == [
+        "teacache_skipped_steps_missing",
+        "teacache_drift_score_missing",
+    ]
+
+
+def test_fastwam_teacache_l1_report_script_hides_missing_result_fields_speedups(
+    tmp_path,
+) -> None:
+    script_path = ROOT / "scripts/fastwam-teacache-l1-report.py"
+    report_root = tmp_path / "reports"
+    report_root.mkdir()
+    compare_payload = {
+        "decision": "faster",
+        "output_gate_passed": True,
+        "metric_comparisons": {},
+        "baseline": {"profiles": []},
+        "variant": {
+            "profiles": ["teacache"],
+            "backend_metadata": {
+                "teacache_hit_rate": {"mean": 0.6},
+                "teacache_skipped_steps": {"mean": 6.0},
+                "teacache_drift_score": {"mean": 0.02},
+            },
+        },
+    }
+    summary_payload = {"metrics": {"success_rate": 0.8}}
+    for name in (
+        "fastwam-libero-teacache-compare.json",
+        "fastwam-robotwin-teacache-compare.json",
+    ):
+        (report_root / name).write_text(json.dumps(compare_payload), encoding="utf-8")
+    for name in (
+        "fastwam-libero-eager-cache-summary.json",
+        "fastwam-libero-teacache-summary.json",
+        "fastwam-robotwin-eager-cache-summary.json",
+        "fastwam-robotwin-teacache-summary.json",
+    ):
+        (report_root / name).write_text(json.dumps(summary_payload), encoding="utf-8")
+
+    result = subprocess.run(
+        [str(script_path), "--report-root", str(report_root), "--json"],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    rows = json.loads(result.stdout)
+
+    assert rows[0]["latency_mean_speedup"] is None
+    assert rows[0]["denoise_mean_speedup"] is None
+    assert rows[0]["latency_mean_speedup_reportable"] is None
+    assert rows[0]["denoise_mean_speedup_reportable"] is None
+    assert rows[0]["action_drift"] is None
+    assert rows[0]["speedup_reportable"] is False
+    assert rows[0]["speedup_blockers"] == [
+        "latency_mean_speedup_missing",
+        "denoise_mean_speedup_missing",
+        "action_drift_missing",
+    ]
 
 
 def test_backend_native_smoke_scripts_define_container_contract() -> None:

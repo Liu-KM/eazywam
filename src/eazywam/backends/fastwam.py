@@ -34,6 +34,17 @@ class FastWAMNativeBackendError(NativeBackendError):
     """Raised when the native FastWAM path cannot be loaded."""
 
 
+_ACTION_ONLY_INFER_KWARGS = (
+    "cache_mode",
+    "cuda_graph_mode",
+    "torch_compile_mode",
+    "teacache_mode",
+    "teacache_threshold",
+    "teacache_warmup_steps",
+    "teacache_layers",
+)
+
+
 @dataclass(frozen=True)
 class FastWAMRuntimeBundle:
     """Loaded FastWAM runtime pieces before harness processor/adapter binding."""
@@ -156,6 +167,8 @@ class FastWAMModelAdapter(NativeModelAdapter):
         cuda_graph_enabled: bool = False,
         torch_compile_params: dict[str, object] | None = None,
         torch_compile_enabled: bool = False,
+        teacache_params: dict[str, object] | None = None,
+        teacache_enabled: bool = False,
     ) -> None:
         self.model = model
         self.cfg = cfg
@@ -167,6 +180,8 @@ class FastWAMModelAdapter(NativeModelAdapter):
         self.cuda_graph_enabled = bool(cuda_graph_enabled)
         self.torch_compile_params = torch_compile_params or {}
         self.torch_compile_enabled = bool(torch_compile_enabled)
+        self.teacache_params = teacache_params or {}
+        self.teacache_enabled = bool(teacache_enabled)
         self.no_grad_factory = no_grad_factory
         self.error_cls = error_cls
 
@@ -194,10 +209,14 @@ class FastWAMModelAdapter(NativeModelAdapter):
         if not isinstance(model_inputs, dict):
             raise self.error_cls("FastWAM processor must return a mapping of model inputs")
 
-        infer_kwargs, cuda_graph_mode, torch_compile_mode = self._infer_action_kwargs(
-            request,
-            model_inputs,
-        )
+        (
+            infer_kwargs,
+            cuda_graph_mode,
+            torch_compile_mode,
+            teacache_mode,
+            teacache_settings,
+            teacache_fallback_reason,
+        ) = self._infer_action_kwargs(request, model_inputs)
         visualize_future_video = self._visualize_future_video()
         with self.no_grad_factory():
             if visualize_future_video:
@@ -205,9 +224,10 @@ class FastWAMModelAdapter(NativeModelAdapter):
                     raise self.error_cls(
                         "FastWAM EVALUATION.visualize_future_video=true requires "
                         "model.infer_joint, but the loaded model does not provide it."
-                    )
+                )
                 joint_kwargs = dict(infer_kwargs)
-                joint_kwargs.pop("cache_mode", None)
+                for name in _ACTION_ONLY_INFER_KWARGS:
+                    joint_kwargs.pop(name, None)
                 raw_output = self.model.infer_joint(**joint_kwargs)
                 return NativeModelCall(
                     raw_output=raw_output,
@@ -225,6 +245,9 @@ class FastWAMModelAdapter(NativeModelAdapter):
                     infer_kwargs=infer_kwargs,
                     cuda_graph_mode=cuda_graph_mode,
                     torch_compile_mode=torch_compile_mode,
+                    teacache_mode=teacache_mode,
+                    teacache_settings=teacache_settings,
+                    teacache_fallback_reason=teacache_fallback_reason,
                 ),
             )
 
@@ -249,11 +272,22 @@ class FastWAMModelAdapter(NativeModelAdapter):
             raise self.error_cls(reason)
 
         reference_request = requests[0]
-        infer_kwargs, _cuda_graph_mode, torch_compile_mode = self._infer_action_kwargs(
+        requested_teacache_mode = self._teacache_mode(reference_request)
+        (
+            infer_kwargs,
+            _cuda_graph_mode,
+            torch_compile_mode,
+            teacache_mode,
+            teacache_settings,
+            teacache_fallback_reason,
+        ) = self._infer_action_kwargs(
             reference_request,
             model_inputs,
             force_cuda_graph_mode="off",
+            force_teacache_mode="off",
         )
+        if requested_teacache_mode != "off":
+            teacache_fallback_reason = "batch_unsupported"
         with self.no_grad_factory():
             raw_output = self.model.infer_action(**infer_kwargs)
         metadata = self._infer_action_metadata(
@@ -261,6 +295,9 @@ class FastWAMModelAdapter(NativeModelAdapter):
             infer_kwargs=infer_kwargs,
             cuda_graph_mode="off",
             torch_compile_mode=torch_compile_mode,
+            teacache_mode=teacache_mode,
+            teacache_settings=teacache_settings,
+            teacache_fallback_reason=teacache_fallback_reason,
         )
         metadata.update(
             {
@@ -295,7 +332,9 @@ class FastWAMModelAdapter(NativeModelAdapter):
         model_inputs: dict[str, Any],
         *,
         force_cuda_graph_mode: str | None = None,
-    ) -> tuple[dict[str, Any], str, str]:
+        force_teacache_mode: str | None = None,
+    ) -> tuple[dict[str, Any], str, str, str, dict[str, object], str | None]:
+        cache_mode = self._dit_cache_mode(request)
         infer_kwargs = {
             "prompt": model_inputs["prompt"],
             "input_image": model_inputs["input_image"],
@@ -308,20 +347,60 @@ class FastWAMModelAdapter(NativeModelAdapter):
             "seed": _optional_int(self._config_value("seed", None)),
             "rand_device": str(self._evaluation_value("rand_device", "cpu")),
             "tiled": bool(self._evaluation_value("tiled", False)),
-            "cache_mode": self._dit_cache_mode(request),
+            "cache_mode": cache_mode,
         }
+        teacache_mode = force_teacache_mode or self._teacache_mode(request)
         cuda_graph_mode = force_cuda_graph_mode or self._cuda_graph_mode(request)
+        if (
+            force_cuda_graph_mode is None
+            and teacache_mode != "off"
+            and "cuda_graph_mode" not in request.runtime_options
+            and "cuda_graph_mode" not in self.config
+        ):
+            cuda_graph_mode = "off"
         if self._infer_action_accepts("cuda_graph_mode"):
             infer_kwargs["cuda_graph_mode"] = cuda_graph_mode
         torch_compile_mode = self._torch_compile_mode(request)
         if self._infer_action_accepts("torch_compile_mode"):
             infer_kwargs["torch_compile_mode"] = torch_compile_mode
+        teacache_fallback_reason = None
+        if teacache_mode != "off" and cache_mode != "video_kv":
+            teacache_fallback_reason = "requires_video_kv_cache"
+        if self._infer_action_accepts("teacache_mode"):
+            infer_kwargs["teacache_mode"] = teacache_mode
+        elif teacache_mode != "off":
+            teacache_mode = "off"
+            teacache_fallback_reason = "teacache_hook_unavailable"
+        teacache_threshold = self._teacache_threshold(request)
+        teacache_warmup_steps = self._teacache_warmup_steps(request)
+        teacache_layers = self._teacache_layers(request)
+        if self._infer_action_accepts("teacache_threshold"):
+            infer_kwargs["teacache_threshold"] = teacache_threshold
+        if self._infer_action_accepts("teacache_warmup_steps"):
+            infer_kwargs["teacache_warmup_steps"] = teacache_warmup_steps
+        if self._infer_action_accepts("teacache_layers"):
+            infer_kwargs["teacache_layers"] = teacache_layers
+        teacache_settings = {
+            "teacache_layers": teacache_layers,
+            "teacache_threshold": teacache_threshold,
+            "teacache_warmup_steps": teacache_warmup_steps,
+            "teacache_hit_rate": 0.0,
+            "teacache_skipped_steps": 0,
+            "teacache_drift_score": None,
+        }
         if (
             self._visualize_future_video()
             or "num_video_frames" in inspect.signature(self.model.infer_action).parameters
         ):
             infer_kwargs["num_video_frames"] = self._num_video_frames()
-        return infer_kwargs, cuda_graph_mode, torch_compile_mode
+        return (
+            infer_kwargs,
+            cuda_graph_mode,
+            torch_compile_mode,
+            teacache_mode,
+            teacache_settings,
+            teacache_fallback_reason,
+        )
 
     def _infer_action_metadata(
         self,
@@ -330,6 +409,9 @@ class FastWAMModelAdapter(NativeModelAdapter):
         infer_kwargs: dict[str, Any],
         cuda_graph_mode: str,
         torch_compile_mode: str,
+        teacache_mode: str,
+        teacache_settings: dict[str, object],
+        teacache_fallback_reason: str | None,
     ) -> dict[str, object]:
         metadata: dict[str, object] = {
             "fastwam_call": "infer_action",
@@ -340,6 +422,15 @@ class FastWAMModelAdapter(NativeModelAdapter):
             "torch_compile_enabled": torch_compile_mode != "off",
             "torch_compile_mode": torch_compile_mode,
             "torch_compile_hook": "fastwam_torch_compile_action_body",
+            "teacache_enabled": (
+                teacache_mode != "off"
+                and infer_kwargs.get("cache_mode") == "video_kv"
+                and teacache_fallback_reason is None
+            ),
+            "teacache_mode": teacache_mode,
+            "teacache_hook": "fastwam_teacache_action_step_output",
+            **teacache_settings,
+            "teacache_fallback_reason": teacache_fallback_reason,
         }
         if isinstance(raw_output, dict) and isinstance(raw_output.get("metadata"), dict):
             metadata.update(raw_output["metadata"])
@@ -352,6 +443,7 @@ class FastWAMModelAdapter(NativeModelAdapter):
             self._num_inference_steps(first),
             self._dit_cache_mode(first),
             self._torch_compile_mode(first),
+            self._teacache_mode(first),
         )
         for request in requests[1:]:
             signature = (
@@ -359,6 +451,7 @@ class FastWAMModelAdapter(NativeModelAdapter):
                 self._num_inference_steps(request),
                 self._dit_cache_mode(request),
                 self._torch_compile_mode(request),
+                self._teacache_mode(request),
             )
             if signature != first_signature:
                 return "FastWAM batch inference requires homogeneous action/runtime options"
@@ -378,6 +471,7 @@ class FastWAMModelAdapter(NativeModelAdapter):
             "num_inference_steps": self._num_inference_steps(request),
             "cache_mode": self._dit_cache_mode(request),
             "torch_compile_mode": self._torch_compile_mode(request),
+            "teacache_mode": self._teacache_mode(request),
         }
 
     def _num_inference_steps(self, request: InferenceRequest) -> int:
@@ -442,6 +536,37 @@ class FastWAMModelAdapter(NativeModelAdapter):
             )
         return mode
 
+    def _teacache_mode(self, request: InferenceRequest) -> str:
+        configured = request.runtime_options.get("teacache_mode")
+        if configured is None and self.teacache_enabled:
+            configured = self.teacache_params.get("mode", "auto")
+        mode = _normalize_teacache_mode(configured)
+        if mode not in {"off", "auto"}:
+            raise self.error_cls(
+                "FastWAM teacache mode must be one of: off, auto; "
+                f"got {mode!r}."
+            )
+        return mode
+
+    def _teacache_threshold(self, request: InferenceRequest) -> float | None:
+        configured = request.runtime_options.get("teacache_threshold")
+        if configured is None and self.teacache_enabled:
+            configured = self.teacache_params.get("threshold")
+        return _optional_float(configured)
+
+    def _teacache_warmup_steps(self, request: InferenceRequest) -> int | None:
+        configured = request.runtime_options.get("teacache_warmup_steps")
+        if configured is None and self.teacache_enabled:
+            configured = self.teacache_params.get("warmup_steps")
+        return _optional_int(configured)
+
+    def _teacache_layers(self, request: InferenceRequest) -> object:
+        if "teacache_layers" in request.runtime_options:
+            return request.runtime_options["teacache_layers"]
+        if self.teacache_enabled:
+            return self.teacache_params.get("layers")
+        return None
+
     def _infer_action_accepts(self, name: str) -> bool:
         try:
             signature = inspect.signature(self.model.infer_action)
@@ -490,11 +615,13 @@ class FastWAMBackend(NativeBackendBase):
         "dit_cache": "fastwam_video_kv_cache",
         "cuda_graph": "fastwam_cuda_graph_action_body",
         "torch_compile": "fastwam_torch_compile_action_body",
+        "teacache": "fastwam_teacache_action_step_output",
     }
     loaded_optimization_hooks: ClassVar[dict[str, str]] = {
         "dit_cache": "fastwam_video_kv_cache",
         "cuda_graph": "fastwam_cuda_graph_action_body",
         "torch_compile": "fastwam_torch_compile_action_body",
+        "teacache": "fastwam_teacache_action_step_output",
     }
 
     def __init__(self, manifest: Manifest, profiles: list[OptimizationProfile]) -> None:
@@ -640,6 +767,8 @@ class FastWAMBackend(NativeBackendBase):
             cuda_graph_enabled=self.profile_enabled("cuda_graph"),
             torch_compile_params=self.profile_settings("torch_compile"),
             torch_compile_enabled=self.profile_enabled("torch_compile"),
+            teacache_params=self.profile_settings("teacache"),
+            teacache_enabled=self.profile_enabled("teacache"),
             no_grad_factory=self.no_grad,
             error_cls=self.error_cls,
         )
@@ -707,6 +836,16 @@ class FastWAMBackend(NativeBackendBase):
                 "reason": "torch_compile_hook_unavailable",
             }
 
+        if profile.name == "teacache":
+            if self._teacache_hook_available():
+                return status
+            return {
+                **status,
+                "state": "fallback",
+                "hook": "fastwam_teacache_action_step_output",
+                "reason": "teacache_hook_unavailable",
+            }
+
         if profile.name != "dit_cache" or self._dit_cache_hook_available():
             return status
         return {
@@ -760,6 +899,21 @@ class FastWAMBackend(NativeBackendBase):
         except (TypeError, ValueError):
             return False
         return "torch_compile_mode" in signature.parameters or any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+
+    def _teacache_hook_available(self) -> bool:
+        if not self._dit_cache_hook_available():
+            return False
+        infer_action = getattr(self.model, "infer_action", None)
+        if not callable(infer_action):
+            return False
+        try:
+            signature = inspect.signature(infer_action)
+        except (TypeError, ValueError):
+            return False
+        return "teacache_mode" in signature.parameters or any(
             parameter.kind is inspect.Parameter.VAR_KEYWORD
             for parameter in signature.parameters.values()
         )
@@ -1006,6 +1160,19 @@ def _normalize_cuda_graph_mode(value: object) -> str:
 
 
 def _normalize_torch_compile_mode(value: object) -> str:
+    if value is True:
+        return "auto"
+    if value is False or value is None:
+        return "off"
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on", "auto"}:
+        return "auto"
+    if text in {"0", "false", "no", "off", "none"}:
+        return "off"
+    return text
+
+
+def _normalize_teacache_mode(value: object) -> str:
     if value is True:
         return "auto"
     if value is False or value is None:

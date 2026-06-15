@@ -110,3 +110,28 @@ accepted success rate; the wrapper defaults to `1.0` for the single-task
 acceptance smoke. `--json` prints a machine-readable acceptance report for
 remote logs or CI artifacts. The wrapper also saves that report as
 `*-acceptance.json` so remote runs leave a durable pass/fail artifact.
+
+FastWAM TeaCache L1 SuperPod command helper:
+
+```bash
+scripts/fastwam-teacache-l1-superpod.sh
+scripts/fastwam-teacache-l1-superpod.sh --execute \
+  --cache-dir /path/to/wam-cache \
+  --upstream-dir /path/to/FastWAM \
+  --robotwin-root /path/to/RoboTwin \
+  --trace-root /path/to/traces/fastwam-teacache-l1 \
+  --report-root /path/to/reports/fastwam-teacache-l1 \
+  --run-id teacache-l1-YYYYMMDD
+scripts/fastwam-teacache-l1-report.py \
+  --report-root /path/to/reports/fastwam-teacache-l1/teacache-l1-YYYYMMDD
+```
+
+The helper is scheduler-agnostic. By default it only prints the LIBERO and
+RoboTwin baseline/candidate commands, the matching `wam compare` commands, and
+the final report extraction command.
+With `--execute`, run it inside an existing prepared GPU allocation or
+container; it saves eval summaries, compare JSON files, and
+`fastwam-teacache-l1-report.md` plus `fastwam-teacache-l1-report.json` under
+the run-specific report directory. The standalone report helper can re-extract
+markdown or JSON result rows from those JSON files after the real runs
+complete. Do not record local smoke numbers as TeaCache L1 evidence.

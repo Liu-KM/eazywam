@@ -38,11 +38,17 @@ COPY src ./src
 COPY containers/fastwam/native-smoke.sh /usr/local/bin/wam-fastwam-native-smoke
 COPY scripts/setup_fastwam_native_env.sh ./scripts/setup_fastwam_native_env.sh
 COPY scripts/fastwam-libero-eval.sh ./scripts/fastwam-libero-eval.sh
+COPY scripts/fastwam-teacache-l1-superpod.sh ./scripts/fastwam-teacache-l1-superpod.sh
+COPY scripts/fastwam-teacache-l1-report.py ./scripts/fastwam-teacache-l1-report.py
 
 RUN chmod +x /usr/local/bin/wam-fastwam-native-smoke \
       ./scripts/setup_fastwam_native_env.sh \
       ./scripts/fastwam-libero-eval.sh \
+      ./scripts/fastwam-teacache-l1-superpod.sh \
+      ./scripts/fastwam-teacache-l1-report.py \
     && ln -sf /workspace/eazywam/scripts/fastwam-libero-eval.sh /usr/local/bin/wam-fastwam-libero-eval \
+    && ln -sf /workspace/eazywam/scripts/fastwam-teacache-l1-superpod.sh /usr/local/bin/wam-fastwam-teacache-l1-superpod \
+    && ln -sf /workspace/eazywam/scripts/fastwam-teacache-l1-report.py /usr/local/bin/wam-fastwam-teacache-l1-report \
     && ./scripts/setup_fastwam_native_env.sh \
       --venv "${WAM_FASTWAM_VENV}" \
       --libero-dir /opt/LIBERO \

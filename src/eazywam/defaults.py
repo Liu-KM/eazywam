@@ -46,6 +46,10 @@ def default_registry() -> Registry:
     registry.register_optimization("dit_cache", {})
     registry.register_optimization("cuda_graph", {"mode": "auto", "capture": "action_body"})
     registry.register_optimization("torch_compile", {"mode": "auto", "target": "action_body"})
+    registry.register_optimization(
+        "teacache",
+        {"mode": "auto", "threshold": None, "warmup_steps": None, "layers": None},
+    )
     registry.register_optimization("jpeg_observation_compression", {})
     registry.register_optimization("parallel_inference", {})
     return registry

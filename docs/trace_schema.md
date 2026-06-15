@@ -158,6 +158,14 @@ metadata:
 - `torch_compile_success`
 - `torch_compile_fallback_reason`
 - `torch_compile_wall_ms`
+- `teacache_enabled`
+- `teacache_mode`: `off` or `auto`
+- `teacache_threshold`
+- `teacache_warmup_steps`
+- `teacache_hit_rate`
+- `teacache_skipped_steps`
+- `teacache_drift_score`
+- `teacache_fallback_reason`
 - `dit_cache_hook`: `fastwam_video_kv_cache`
 - `num_inference_steps`
 - `video_seq_len`
@@ -221,10 +229,18 @@ parsing. Standard field groups are:
 - `teacache_mode`
 - `teacache_layers`
 - `teacache_threshold`
+- `teacache_warmup_steps`
 - `teacache_hit_rate`
 - `teacache_skipped_steps`
 - `teacache_drift_score`
 - `teacache_fallback_reason`
+
+`teacache_fallback_reason=null` means the requested TeaCache state was honored.
+Known non-null values include `requires_video_kv_cache` when the request did
+not use the exact FastWAM `dit_cache(video_kv)` path, `batch_unsupported` when
+FastWAM batch inference explicitly disabled TeaCache, and
+`teacache_hook_unavailable` when the loaded native model lacks the action-step
+TeaCache hook.
 
 For `serve` mode, startup emits backend load/warmup/reset events before
 `serve_ready`. Each `/infer` request emits `serve_request_start` and
@@ -571,6 +587,7 @@ Artifacts should be keyed by `(episode_id, step_id, replan_id)` where possible.
 - `runtime_contract_gate`
 - `runtime_contract_gate_passed`
 - `runtime_contract_gate_details`
+- `metric_comparisons`
 - `decision`: `faster`, `slower`, `same`, `invalid`, or `not_comparable`
 - `warnings`
 
@@ -580,7 +597,25 @@ should never claim a speedup when output checks fail.
 The baseline and variant summaries include trace path, run id, manifest id,
 backend, processor, mode, optimization profile names, latency statistics,
 runtime contract payload, action shapes, action summaries, optional
-future-frame summaries, optional value summaries, and errors.
+future-frame summaries, optional value summaries, numeric backend metadata
+summaries, eval metric summaries, and errors.
+Numeric backend metadata summaries include count, mean, p50, and p95 for finite
+numeric fields, so profile telemetry such as `teacache_hit_rate`,
+`teacache_skipped_steps`, and `teacache_drift_score` can be reported from
+SuperPod trace comparisons without backend-specific parsing.
+Non-numeric backend metadata values are summarized separately as
+`backend_metadata_values`, with observed value counts and unique string values,
+so fields such as `teacache_fallback_reason` can be reported without manually
+grepping trace JSONL.
+`metric_comparisons` reports common baseline/variant mean values, relative
+changes, and speedup factors for latency or wall-time metrics such as
+`latency_ms.mean` and `backend_metadata.denoise_wall_ms.mean`. For quality
+metrics where larger is better, such as `eval_metrics.success_rate.mean`,
+`speedup` is left null and `relative_change` should be reported as a quality
+change.
+Eval metric summaries use the same shape for top-level `native_eval_end`
+metrics such as `success_rate` and `successes`, plus nested
+`external_eval_end.metrics` fields such as `overall.clean_mean_success_rate`.
 When both traces provide action summaries, the output gate also checks that
 action values are finite and that summary drift stays under the configured
 tolerance before reporting a speedup.

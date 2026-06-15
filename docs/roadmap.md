@@ -219,6 +219,6 @@ tracks:
 | Scheduler / sampler | DPM-Solver++, UniPC, AYS, Karras, FlowMatch schedules | Planned adapter layer; call backend/Diffusers solvers where possible. |
 | Precision / attention | bf16/fp16/TF32, SDPA, FlashAttention, xFormers, SageAttention | bf16/SDPA are partial; explicit selectors are planned; SageAttention is optional. |
 | Native cache / exact runtime | FastWAM `dit_cache`, CUDA Graph, warmup/preallocation, torch.compile | `dit_cache` and CUDA Graph are implemented for FastWAM; torch.compile remains experimental. |
-| WAM-specific feature cache | TeaCache, PAB, FasterCache, cross-chunk cache, step skipping | TeaCache is the next planned profile; PAB/FasterCache are optional benchmark backends. |
+| WAM-specific feature cache | TeaCache, PAB, FasterCache, cross-chunk cache, step skipping | FastWAM TeaCache L1 is implemented as an opt-in action-denoise step-output cache pending SuperPod LIBERO/RoboTwin measurements; PAB/FasterCache remain optional benchmark backends. |
 | Throughput / serving | eval sharding, batched action denoise, dynamic batch serving, xDiT | Planned after the profile contract and FastWAM parity hardening. |
 | Experimental / not default | token merging, AsymRnR, Sparse VideoGen, PTQ, FP8 TensorRT | Track as research directions; do not default without model-specific success-rate evidence. |

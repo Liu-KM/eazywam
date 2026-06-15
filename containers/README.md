@@ -132,6 +132,26 @@ pass `--download-assets` when the container should fetch missing model assets.
 The wrapper saves the eval summary in the trace directory and immediately
 validates it with `python -m eazywam.evals.acceptance`.
 
+The image also exposes the FastWAM TeaCache L1 experiment helper:
+
+```bash
+wam-fastwam-teacache-l1-superpod
+wam-fastwam-teacache-l1-superpod --execute \
+  --cache-dir /mnt/wam-cache \
+  --trace-root /mnt/runs/fastwam-teacache-l1 \
+  --report-root /mnt/runs/fastwam-teacache-l1-reports \
+  --run-id teacache-l1-YYYYMMDD
+wam-fastwam-teacache-l1-report \
+  --report-root /mnt/runs/fastwam-teacache-l1-reports/teacache-l1-YYYYMMDD
+```
+
+The TeaCache helper remains scheduler-agnostic. By default it prints the
+LIBERO/RoboTwin baseline and candidate commands; with `--execute`, run it
+inside an existing GPU allocation to generate the real traces, eval summaries,
+compare JSON files, `fastwam-teacache-l1-report.md`, and
+`fastwam-teacache-l1-report.json`. The standalone report command can re-extract
+the markdown table or machine-readable rows from the saved JSON files.
+
 If the site cannot download from Hugging Face inside the GPU job, prepare the
 cache elsewhere and mount it into `/mnt/wam-cache`. For FastWAM LIBERO, the
 minimal eval asset group is:

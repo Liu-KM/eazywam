@@ -492,6 +492,57 @@ def test_cli_rejects_malformed_overrides_without_traceback(capsys) -> None:
         assert "Traceback" not in captured.err
 
 
+def test_cli_eval_passes_teacache_profile_and_runtime_overrides(monkeypatch, tmp_path, capsys) -> None:
+    import eazywam.cli as cli_module
+
+    captured_kwargs = {}
+
+    class CapturingEvalRunner:
+        def run(self, **kwargs):
+            captured_kwargs.update(kwargs)
+            return _CliSummary(
+                {
+                    "status": "planned",
+                    "trace_path": str(tmp_path / "trace.jsonl"),
+                    "metrics": {},
+                }
+            )
+
+    monkeypatch.setattr(cli_module, "EvalRunner", CapturingEvalRunner)
+
+    exit_code = main(
+        [
+            "eval",
+            "fastwam-libero",
+            "--workload",
+            "libero-single-task",
+            "--opt",
+            "teacache",
+            "--set",
+            "teacache_threshold=0.05",
+            "--set",
+            "teacache_warmup_steps=1",
+            "--set",
+            "cuda_graph_mode=off",
+            "--trace-dir",
+            str(tmp_path),
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["status"] == "planned"
+    assert captured_kwargs["model_id"] == "fastwam-libero"
+    assert captured_kwargs["enabled_opts"] == ["teacache"]
+    assert captured_kwargs["workload"] == "libero-single-task"
+    assert captured_kwargs["trace_dir"] == str(tmp_path)
+    assert captured_kwargs["overrides"] == {
+        "teacache_threshold": "0.05",
+        "teacache_warmup_steps": "1",
+        "cuda_graph_mode": "off",
+    }
+
+
 def test_cli_serve_smoke(tmp_path, capsys) -> None:
     exit_code = main(
         [
@@ -863,6 +914,15 @@ def _write_fastwam_robotwin_input(tmp_path):
 
 def _read_events(path):
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+class _CliSummary:
+    def __init__(self, payload, return_code=0):
+        self.payload = payload
+        self.return_code = return_code
+
+    def to_dict(self):
+        return self.payload
 
 
 class _LightFastWAMBackend(FastWAMBackend):

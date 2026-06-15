@@ -112,6 +112,7 @@ optimizations:
     - dit_cache
     - cuda_graph
     - torch_compile
+    - teacache
   profiles:
     action_chunk_scheduling:
       enabled: true
@@ -134,6 +135,15 @@ optimizations:
       params:
         mode: auto
         target: action_body
+    teacache:
+      enabled: false
+      family: feature_cache
+      scope: request
+      params:
+        mode: auto
+        threshold: null
+        warmup_steps: null
+        layers: null
   measured: []
   unsupported:
     vla_cache: Requires the OpenVLA model family.
@@ -165,6 +175,7 @@ deployment:
     - SuperPod jobs 448299, 449814, 449815, and 449827 verified native robotwin-single-task execution over the same 100 phases; final status ok, structural failures 0, aggregate success rate 0.88.
     - RoboTwin manager summaries report requested valid episodes, completed valid episodes, attempted candidate episodes, invalid candidate episodes, and invalid candidate reasons so simulator setup invalidity is not counted as policy failure.
     - FastWAM dit_cache is a request-local video K/V cache toggle. The default mode is video_kv; mode=recompute is for ablation only.
+    - FastWAM teacache is an opt-in approximate request-local feature cache for action-only inference; it is separate from dit_cache and is not native/reference parity evidence.
 
 eval:
   simulator: RoboTwin

@@ -78,8 +78,8 @@ The current families are:
 | `batch_serving` | Improve eval and serving throughput. | eval sharding, dynamic batches, batched action denoise. |
 
 Important naming rule: FastWAM `dit_cache` is the existing request-local video
-K/V cache. TeaCache is a separate future profile named `teacache`; do not merge
-its semantics into `dit_cache`.
+K/V cache. TeaCache is a separate profile named `teacache`; do not merge its
+semantics into `dit_cache`.
 
 ## Optimization Profile Shape
 
@@ -195,6 +195,14 @@ hook `fastwam_torch_compile_action_body`, targets the same action-body callable,
 and remains disabled by default until SuperPod evidence shows that compile
 overhead and graph interaction are worthwhile.
 
+FastWAM `teacache` is the first explicit `feature_cache` profile for FastWAM.
+It is disabled by default and must be requested with `--opt teacache` or a
+runtime option. L1 is action-only, request-local, and only runs when
+`dit_cache.mode=video_kv`; it reuses cached action denoise step outputs when a
+cheap latent drift score is below threshold. It is not the existing exact
+`dit_cache(video_kv)` path, not CUDA Graph, not layer-level TeaCache, and not
+native/reference parity evidence.
+
 SuperPod H800 job `450449` tested the Phase-4 combination on FastWAM LIBERO
 `task_id=0`, `num_trials=1`, `num_inference_steps=10`, with `max_steps=100` to
 limit simulator wall time. The baseline cached path was compared with default
@@ -214,7 +222,13 @@ Trace metadata from FastWAM model calls should include `dit_cache_enabled`,
 `cuda_graph_fallback_reason`, and `cuda_graph_shape_key`. When
 `torch_compile` is requested, metadata should include `torch_compile_enabled`,
 `torch_compile_mode`, `torch_compile_success`, `torch_compile_fallback_reason`,
-and `torch_compile_wall_ms`.
+and `torch_compile_wall_ms`. When `teacache` is requested or disabled, metadata
+should include `teacache_enabled`, `teacache_mode`, `teacache_threshold`,
+`teacache_warmup_steps`, `teacache_hit_rate`, `teacache_skipped_steps`,
+`teacache_drift_score`, and `teacache_fallback_reason` so cached and uncached
+runs can be compared. The L1 FastWAM batch path explicitly disables TeaCache and
+records `teacache_fallback_reason=batch_unsupported` if the profile or runtime
+option requested it.
 
 VLA-Cache is the cleanest first candidate because it already exposes a direct
 on/off flag. FASTER is valuable for action-chunk scheduling and streaming

@@ -291,16 +291,23 @@ trace_fields:
   - teacache_mode
   - teacache_layers
   - teacache_threshold
+  - teacache_warmup_steps
   - teacache_hit_rate
   - teacache_skipped_steps
   - teacache_drift_score
   - teacache_fallback_reason
 output_check: action_drift_and_success_rate
-status: planned
+status: partial
 ```
 
-TeaCache is the next WAM-specific approximate acceleration target. It must be a
-separate profile from `dit_cache`.
+TeaCache is the FastWAM approximate feature-cache target. L1 is opt-in,
+request-local, action-only, and only applies on the FastWAM `dit_cache`
+`video_kv` path. It is implemented as a step-output cache around action denoise
+steps, not as layer-level TeaCache. It must remain separate from `dit_cache`,
+and measurements must report action drift and simulator success rate rather than
+claiming native/reference parity. FastWAM batch inference disables TeaCache for
+L1 and records `teacache_fallback_reason=batch_unsupported` when the profile or
+runtime option requested it.
 
 ### `cuda_graph`
 
@@ -407,4 +414,3 @@ runtime paths without model-specific success-rate evidence:
 - Sparse VideoGen.
 - Q-DiT, PTQ4DiT, ViDiT-Q, and other PTQ methods.
 - FP8 TensorRT or Transformer Engine paths.
-

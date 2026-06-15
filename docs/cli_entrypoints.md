@@ -123,6 +123,18 @@ Current comparison is intentionally conservative:
 - decision: `faster`, `slower`, `same`, `invalid`, or `not_comparable`;
 - speedup is never reported if the action shape gate fails, the runtime contract
   gate fails, or the action shape gate is unavailable.
+- numeric `backend_metadata` fields are summarized in the JSON output, including
+  profile telemetry such as `teacache_hit_rate`, `teacache_skipped_steps`, and
+  `teacache_drift_score`.
+- `metric_comparisons` reports common baseline/variant mean values,
+  relative changes, and speedup factors for latency or wall-time metrics such
+  as `latency_ms.mean` and `backend_metadata.denoise_wall_ms.mean`.
+- non-numeric backend metadata values are summarized under
+  `backend_metadata_values`, including fallback strings such as
+  `teacache_fallback_reason`.
+- native and external eval metrics are summarized in the JSON output, including
+  `success_rate`, `successes`, and nested manager metrics such as
+  `overall.clean_mean_success_rate`.
 
 Example:
 
@@ -230,6 +242,26 @@ prompt, history, session, and metadata. When a reference model entry declares
 `backend.config.native_backend`, `run` maps it to `mode: run` and uses a
 single external observation workload. It does not execute the official evaluator
 and does not use synthetic smoke observations.
+The input JSON may also include `runtime_options`, which are copied into the
+single `InferenceRequest`. For FastWAM TeaCache L1, that is the request-local
+way to opt in without `--opt teacache`:
+
+```json
+{
+  "observation": {
+    "images": {"primary": [[[0, 0, 0]]], "wrist": [[[0, 0, 0]]]},
+    "state": {"proprio": [0.0]},
+    "prompt": "open the drawer"
+  },
+  "runtime_options": {
+    "dit_cache_mode": "video_kv",
+    "teacache_mode": "auto",
+    "teacache_threshold": 0.05,
+    "teacache_warmup_steps": 1,
+    "cuda_graph_mode": "off"
+  }
+}
+```
 
 ```bash
 wam run fastwam-libero \

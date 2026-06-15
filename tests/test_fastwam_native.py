@@ -63,6 +63,30 @@ def test_fastwam_manifests_build_torch_compile_profile() -> None:
         assert profiles[0].params == {"mode": "auto", "target": "action_body"}
 
 
+def test_fastwam_manifests_build_teacache_profile_but_keep_it_default_off() -> None:
+    registry = default_registry()
+
+    for model_id in ("fastwam-libero", "fastwam-robotwin"):
+        manifest = registry.load_manifest(model_id)
+        profiles = registry.build_optimization_profiles(manifest, ["teacache"])
+        default_profiles = registry.build_optimization_profiles(
+            manifest,
+            [],
+            include_defaults=True,
+        )
+
+        assert "teacache" in manifest.supported_optimizations
+        assert manifest.optimizations["profiles"]["teacache"]["family"] == "feature_cache"
+        assert profiles[0].name == "teacache"
+        assert profiles[0].params == {
+            "mode": "auto",
+            "threshold": None,
+            "warmup_steps": None,
+            "layers": None,
+        }
+        assert "teacache" not in {profile.name for profile in default_profiles}
+
+
 def test_default_registry_exposes_fastwam_libero_processor() -> None:
     registry = default_registry()
     manifest = load_builtin_manifest("fastwam-libero")
@@ -322,6 +346,45 @@ def test_fastwam_native_backend_infer_batch_calls_model_once() -> None:
     assert "batch_model_ms" in results[0].timing
 
 
+def test_fastwam_native_backend_infer_batch_disables_teacache_with_fallback() -> None:
+    registry = default_registry()
+    data = load_builtin_manifest("fastwam-libero").to_dict()
+    data["backend"] = {"name": "fastwam", "mode": "native", "config": {}}
+    manifest = manifest_from_dict(data)
+    profiles = registry.build_optimization_profiles(manifest, ["teacache"])
+    backend = registry.create_backend(manifest, profiles)
+    model = _BatchModel()
+    backend.model = model
+    backend.processor = _BatchFastWAMProcessor()
+    backend.cfg = _fastwam_cfg(seed=None)
+    backend.loaded = True
+    backend.warmed = True
+    backend.no_grad = lambda: nullcontext()
+
+    results = backend.infer_batch(
+        [
+            InferenceRequest(
+                observation=Observation(images={}, prompt="open the drawer"),
+                action_horizon=32,
+                replan_steps=10,
+            ),
+            InferenceRequest(
+                observation=Observation(images={}, prompt="close the drawer"),
+                action_horizon=32,
+                replan_steps=10,
+            ),
+        ]
+    )
+
+    assert model.call_count == 1
+    assert model.kwargs["teacache_mode"] == "off"
+    assert results[0].backend_metadata["teacache_enabled"] is False
+    assert results[0].backend_metadata["teacache_mode"] == "off"
+    assert results[0].backend_metadata["teacache_fallback_reason"] == "batch_unsupported"
+    assert results[0].backend_metadata["teacache_skipped_steps"] == 0
+    assert results[1].backend_metadata["teacache_fallback_reason"] == "batch_unsupported"
+
+
 def test_fastwam_model_adapter_passes_profile_cache_mode_and_metadata() -> None:
     adapter = FastWAMModelAdapter(
         model=_ModelRequiringNumVideoFrames(),
@@ -514,6 +577,216 @@ def test_fastwam_model_adapter_runtime_options_disable_torch_compile() -> None:
     assert call.metadata["torch_compile_mode"] == "off"
 
 
+def test_fastwam_model_adapter_passes_teacache_profile_kwargs_and_metadata() -> None:
+    adapter = FastWAMModelAdapter(
+        model=_ModelRequiringNumVideoFrames(),
+        cfg=_fastwam_cfg(),
+        checkpoint_path=None,
+        dataset_stats_path=None,
+        config={},
+        dit_cache_params={"mode": "video_kv"},
+        no_grad_factory=lambda: nullcontext(),
+        error_cls=FastWAMNativeBackendError,
+        cuda_graph_params={"mode": "auto"},
+        cuda_graph_enabled=True,
+        teacache_params={
+            "mode": "auto",
+            "threshold": 0.02,
+            "warmup_steps": 2,
+            "layers": None,
+        },
+        teacache_enabled=True,
+    )
+
+    call = adapter.infer(
+        InferenceRequest(
+            observation=Observation(images={}, prompt="open the drawer"),
+            action_horizon=32,
+            replan_steps=10,
+        ),
+        {"prompt": "prompt", "input_image": "image", "proprio": "proprio"},
+    )
+
+    assert adapter.model.kwargs["teacache_mode"] == "auto"
+    assert adapter.model.kwargs["teacache_threshold"] == 0.02
+    assert adapter.model.kwargs["teacache_warmup_steps"] == 2
+    assert adapter.model.kwargs["teacache_layers"] is None
+    assert adapter.model.kwargs["cuda_graph_mode"] == "off"
+    assert call.metadata["teacache_enabled"] is True
+    assert call.metadata["teacache_mode"] == "auto"
+    assert call.metadata["teacache_hook"] == "fastwam_teacache_action_step_output"
+
+
+def test_fastwam_model_adapter_runtime_options_disable_teacache() -> None:
+    adapter = FastWAMModelAdapter(
+        model=_ModelRequiringNumVideoFrames(),
+        cfg=_fastwam_cfg(),
+        checkpoint_path=None,
+        dataset_stats_path=None,
+        config={},
+        dit_cache_params={"mode": "video_kv"},
+        no_grad_factory=lambda: nullcontext(),
+        error_cls=FastWAMNativeBackendError,
+        teacache_params={"mode": "auto"},
+        teacache_enabled=True,
+    )
+
+    call = adapter.infer(
+        InferenceRequest(
+            observation=Observation(images={}, prompt="open the drawer"),
+            action_horizon=32,
+            replan_steps=10,
+            runtime_options={"teacache_mode": "off"},
+        ),
+        {"prompt": "prompt", "input_image": "image", "proprio": "proprio"},
+    )
+
+    assert adapter.model.kwargs["teacache_mode"] == "off"
+    assert call.metadata["teacache_enabled"] is False
+    assert call.metadata["teacache_mode"] == "off"
+    assert call.metadata["teacache_hit_rate"] == 0.0
+    assert call.metadata["teacache_skipped_steps"] == 0
+    assert call.metadata["teacache_drift_score"] is None
+
+
+def test_fastwam_model_adapter_backend_config_does_not_enable_teacache() -> None:
+    adapter = FastWAMModelAdapter(
+        model=_ModelRequiringNumVideoFrames(),
+        cfg=_fastwam_cfg(),
+        checkpoint_path=None,
+        dataset_stats_path=None,
+        config={
+            "teacache_mode": "auto",
+            "teacache_threshold": 0.01,
+            "teacache_warmup_steps": 1,
+        },
+        dit_cache_params={"mode": "video_kv"},
+        no_grad_factory=lambda: nullcontext(),
+        error_cls=FastWAMNativeBackendError,
+        teacache_enabled=False,
+    )
+
+    call = adapter.infer(
+        InferenceRequest(
+            observation=Observation(images={}, prompt="open the drawer"),
+            action_horizon=32,
+            replan_steps=10,
+        ),
+        {"prompt": "prompt", "input_image": "image", "proprio": "proprio"},
+    )
+
+    assert adapter.model.kwargs["teacache_mode"] == "off"
+    assert adapter.model.kwargs["teacache_threshold"] is None
+    assert adapter.model.kwargs["teacache_warmup_steps"] is None
+    assert call.metadata["teacache_enabled"] is False
+    assert call.metadata["teacache_mode"] == "off"
+
+
+def test_fastwam_model_adapter_runtime_options_enable_teacache_without_profile() -> None:
+    adapter = FastWAMModelAdapter(
+        model=_ModelRequiringNumVideoFrames(),
+        cfg=_fastwam_cfg(),
+        checkpoint_path=None,
+        dataset_stats_path=None,
+        config={},
+        dit_cache_params={"mode": "video_kv"},
+        no_grad_factory=lambda: nullcontext(),
+        error_cls=FastWAMNativeBackendError,
+        cuda_graph_params={"mode": "auto"},
+        cuda_graph_enabled=True,
+        teacache_enabled=False,
+    )
+
+    call = adapter.infer(
+        InferenceRequest(
+            observation=Observation(images={}, prompt="open the drawer"),
+            action_horizon=32,
+            replan_steps=10,
+            runtime_options={
+                "teacache_mode": "auto",
+                "teacache_threshold": 0.04,
+                "teacache_warmup_steps": 3,
+            },
+        ),
+        {"prompt": "prompt", "input_image": "image", "proprio": "proprio"},
+    )
+
+    assert adapter.model.kwargs["teacache_mode"] == "auto"
+    assert adapter.model.kwargs["teacache_threshold"] == 0.04
+    assert adapter.model.kwargs["teacache_warmup_steps"] == 3
+    assert adapter.model.kwargs["cuda_graph_mode"] == "off"
+    assert call.metadata["teacache_enabled"] is True
+    assert call.metadata["teacache_mode"] == "auto"
+
+
+def test_fastwam_model_adapter_records_teacache_fallback_without_video_kv() -> None:
+    adapter = FastWAMModelAdapter(
+        model=_ModelRequiringNumVideoFrames(),
+        cfg=_fastwam_cfg(),
+        checkpoint_path=None,
+        dataset_stats_path=None,
+        config={},
+        dit_cache_params={"mode": "video_kv"},
+        no_grad_factory=lambda: nullcontext(),
+        error_cls=FastWAMNativeBackendError,
+        teacache_params={"mode": "auto"},
+        teacache_enabled=True,
+    )
+
+    call = adapter.infer(
+        InferenceRequest(
+            observation=Observation(images={}, prompt="open the drawer"),
+            action_horizon=32,
+            replan_steps=10,
+            runtime_options={"dit_cache_mode": "recompute"},
+        ),
+        {"prompt": "prompt", "input_image": "image", "proprio": "proprio"},
+    )
+
+    assert adapter.model.kwargs["cache_mode"] == "recompute"
+    assert adapter.model.kwargs["teacache_mode"] == "auto"
+    assert call.metadata["teacache_enabled"] is False
+    assert call.metadata["teacache_mode"] == "auto"
+    assert call.metadata["teacache_fallback_reason"] == "requires_video_kv_cache"
+    assert call.metadata["teacache_hit_rate"] == 0.0
+    assert call.metadata["teacache_skipped_steps"] == 0
+
+
+def test_fastwam_model_adapter_records_teacache_fallback_for_old_signature() -> None:
+    adapter = FastWAMModelAdapter(
+        model=_StrictModelWithoutTeaCacheKwargs(),
+        cfg=_fastwam_cfg(),
+        checkpoint_path=None,
+        dataset_stats_path=None,
+        config={},
+        dit_cache_params={"mode": "video_kv"},
+        no_grad_factory=lambda: nullcontext(),
+        error_cls=FastWAMNativeBackendError,
+        teacache_params={"mode": "auto", "threshold": 0.03, "warmup_steps": 2},
+        teacache_enabled=True,
+    )
+
+    call = adapter.infer(
+        InferenceRequest(
+            observation=Observation(images={}, prompt="open the drawer"),
+            action_horizon=32,
+            replan_steps=10,
+        ),
+        {"prompt": "prompt", "input_image": "image", "proprio": "proprio"},
+    )
+
+    assert adapter.model.kwargs["cache_mode"] == "video_kv"
+    assert "teacache_mode" not in adapter.model.kwargs
+    assert call.metadata["teacache_enabled"] is False
+    assert call.metadata["teacache_mode"] == "off"
+    assert call.metadata["teacache_threshold"] == 0.03
+    assert call.metadata["teacache_warmup_steps"] == 2
+    assert call.metadata["teacache_hit_rate"] == 0.0
+    assert call.metadata["teacache_skipped_steps"] == 0
+    assert call.metadata["teacache_drift_score"] is None
+    assert call.metadata["teacache_fallback_reason"] == "teacache_hook_unavailable"
+
+
 def test_fastwam_model_adapter_rejects_invalid_cache_mode() -> None:
     adapter = FastWAMModelAdapter(
         model=_ModelRequiringNumVideoFrames(),
@@ -542,7 +815,8 @@ def test_fastwam_native_backend_uses_infer_joint_for_future_video() -> None:
     data = load_builtin_manifest("fastwam-libero").to_dict()
     data["backend"] = {"name": "fastwam", "mode": "native", "config": {}}
     manifest = manifest_from_dict(data)
-    backend = registry.create_backend(manifest, [])
+    profiles = registry.build_optimization_profiles(manifest, ["teacache"])
+    backend = registry.create_backend(manifest, profiles)
     model = _ModelWithInferJoint()
     backend.model = model
     backend.processor = _BoundFastWAMProcessor()
@@ -564,6 +838,12 @@ def test_fastwam_native_backend_uses_infer_joint_for_future_video() -> None:
     assert model.joint_kwargs["action_horizon"] == 32
     assert model.joint_kwargs["num_video_frames"] == 9
     assert "cache_mode" not in model.joint_kwargs
+    assert "cuda_graph_mode" not in model.joint_kwargs
+    assert "torch_compile_mode" not in model.joint_kwargs
+    assert "teacache_mode" not in model.joint_kwargs
+    assert "teacache_threshold" not in model.joint_kwargs
+    assert "teacache_warmup_steps" not in model.joint_kwargs
+    assert "teacache_layers" not in model.joint_kwargs
     assert result.backend_metadata["fastwam_call"] == "infer_joint"
     assert result.backend_metadata["future_video_present"] is True
     assert result.future_frames == {
@@ -678,6 +958,239 @@ def test_fastwam_torch_compile_profile_status_planned_fallback_and_applied() -> 
     assert applied[0]["hook"] == "fastwam_torch_compile_action_body"
 
 
+def test_fastwam_teacache_profile_status_planned_fallback_and_applied() -> None:
+    registry = default_registry()
+    data = load_builtin_manifest("fastwam-libero").to_dict()
+    data["backend"] = {"name": "fastwam", "mode": "native", "config": {}}
+    manifest = manifest_from_dict(data)
+    profiles = registry.build_optimization_profiles(manifest, ["teacache"])
+    backend = registry.create_backend(manifest, profiles)
+
+    planned = backend.plan_optimization_profiles(profiles)
+    fallback = backend.apply_loaded_optimization_profiles(profiles)
+    backend.model = _ModelWithFastWAMTeaCacheHook()
+    backend.loaded = True
+    applied = backend.apply_loaded_optimization_profiles(profiles)
+
+    assert planned[0]["state"] == "planned"
+    assert planned[0]["hook"] == "fastwam_teacache_action_step_output"
+    assert fallback[0]["state"] == "fallback"
+    assert fallback[0]["reason"] == "backend_not_loaded"
+    assert applied[0]["state"] == "applied"
+    assert applied[0]["hook"] == "fastwam_teacache_action_step_output"
+
+
+def test_fastwam_native_teacache_reduces_action_noise_step_calls() -> None:
+    torch = pytest.importorskip("torch")
+    from fastwam.models.wan22.fastwam import FastWAM, _VideoKVCacheState
+
+    model = FastWAM.__new__(FastWAM)
+    torch.nn.Module.__init__(model)
+    model.device = torch.device("cpu")
+    model.torch_dtype = torch.float32
+    model.video_expert = SimpleNamespace(
+        video_attention_mask_mode="first_frame_causal",
+        fuse_vae_embedding_in_latents=False,
+    )
+    model.action_expert = SimpleNamespace(action_dim=2)
+    model.infer_action_scheduler = _StaticActionScheduler(torch)
+    model._encode_input_image_latents_tensor = lambda input_image, tiled=False: torch.zeros(
+        (1, 1, 1, 1, 1)
+    )
+    model._prepare_video_kv_cache = lambda **kwargs: _VideoKVCacheState(
+        kv_cache=[],
+        attention_mask=torch.ones((1, 1), dtype=torch.bool),
+        video_seq_len=1,
+        prefill_wall_ms=0.1,
+        cache_bytes=0,
+    )
+    call_count = 0
+
+    def predict_action_noise_step(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        return torch.zeros_like(kwargs["latents_action"])
+
+    model._predict_action_noise_step = predict_action_noise_step
+
+    output = model.infer_action(
+        prompt=None,
+        input_image=torch.zeros((1, 3, 16, 16)),
+        action_horizon=4,
+        context=torch.zeros((1, 1, 2)),
+        context_mask=torch.ones((1, 1), dtype=torch.bool),
+        num_inference_steps=4,
+        seed=123,
+        cache_mode="video_kv",
+        cuda_graph_mode="off",
+        teacache_mode="auto",
+        teacache_threshold=1.0,
+        teacache_warmup_steps=1,
+    )
+
+    assert call_count == 1
+    assert output["metadata"]["teacache_enabled"] is True
+    assert output["metadata"]["teacache_mode"] == "auto"
+    assert output["metadata"]["teacache_warmup_steps"] == 1
+    assert output["metadata"]["teacache_skipped_steps"] == 3
+    assert output["metadata"]["teacache_hit_rate"] == 0.75
+    assert output["metadata"]["teacache_fallback_reason"] is None
+
+
+def test_fastwam_native_teacache_cache_is_request_local() -> None:
+    torch = pytest.importorskip("torch")
+    from fastwam.models.wan22.fastwam import FastWAM, _VideoKVCacheState
+
+    model = FastWAM.__new__(FastWAM)
+    torch.nn.Module.__init__(model)
+    model.device = torch.device("cpu")
+    model.torch_dtype = torch.float32
+    model.video_expert = SimpleNamespace(
+        video_attention_mask_mode="first_frame_causal",
+        fuse_vae_embedding_in_latents=False,
+    )
+    model.action_expert = SimpleNamespace(action_dim=2)
+    model.infer_action_scheduler = _StaticActionScheduler(torch)
+    model._encode_input_image_latents_tensor = lambda input_image, tiled=False: torch.zeros(
+        (1, 1, 1, 1, 1)
+    )
+    model._prepare_video_kv_cache = lambda **kwargs: _VideoKVCacheState(
+        kv_cache=[],
+        attention_mask=torch.ones((1, 1), dtype=torch.bool),
+        video_seq_len=1,
+        prefill_wall_ms=0.1,
+        cache_bytes=0,
+    )
+    call_count = 0
+
+    def predict_action_noise_step(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        return torch.zeros_like(kwargs["latents_action"])
+
+    model._predict_action_noise_step = predict_action_noise_step
+    kwargs = {
+        "prompt": None,
+        "input_image": torch.zeros((1, 3, 16, 16)),
+        "action_horizon": 4,
+        "context": torch.zeros((1, 1, 2)),
+        "context_mask": torch.ones((1, 1), dtype=torch.bool),
+        "num_inference_steps": 4,
+        "seed": 123,
+        "cache_mode": "video_kv",
+        "cuda_graph_mode": "off",
+        "teacache_mode": "auto",
+        "teacache_threshold": 1.0,
+        "teacache_warmup_steps": 1,
+    }
+
+    first = model.infer_action(**kwargs)
+    second = model.infer_action(**kwargs)
+
+    assert call_count == 2
+    assert first["metadata"]["teacache_skipped_steps"] == 3
+    assert second["metadata"]["teacache_skipped_steps"] == 3
+    assert first["metadata"]["teacache_hit_rate"] == 0.75
+    assert second["metadata"]["teacache_hit_rate"] == 0.75
+
+
+def test_fastwam_native_teacache_off_calls_every_action_noise_step() -> None:
+    torch = pytest.importorskip("torch")
+    from fastwam.models.wan22.fastwam import FastWAM, _VideoKVCacheState
+
+    model = FastWAM.__new__(FastWAM)
+    torch.nn.Module.__init__(model)
+    model.device = torch.device("cpu")
+    model.torch_dtype = torch.float32
+    model.video_expert = SimpleNamespace(
+        video_attention_mask_mode="first_frame_causal",
+        fuse_vae_embedding_in_latents=False,
+    )
+    model.action_expert = SimpleNamespace(action_dim=2)
+    model.infer_action_scheduler = _StaticActionScheduler(torch)
+    model._encode_input_image_latents_tensor = lambda input_image, tiled=False: torch.zeros(
+        (1, 1, 1, 1, 1)
+    )
+    model._prepare_video_kv_cache = lambda **kwargs: _VideoKVCacheState(
+        kv_cache=[],
+        attention_mask=torch.ones((1, 1), dtype=torch.bool),
+        video_seq_len=1,
+        prefill_wall_ms=0.1,
+        cache_bytes=0,
+    )
+    call_count = 0
+
+    def predict_action_noise_step(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        return torch.zeros_like(kwargs["latents_action"])
+
+    model._predict_action_noise_step = predict_action_noise_step
+
+    output = model.infer_action(
+        prompt=None,
+        input_image=torch.zeros((1, 3, 16, 16)),
+        action_horizon=4,
+        context=torch.zeros((1, 1, 2)),
+        context_mask=torch.ones((1, 1), dtype=torch.bool),
+        num_inference_steps=4,
+        seed=123,
+        cache_mode="video_kv",
+        cuda_graph_mode="off",
+        teacache_mode="off",
+    )
+
+    assert call_count == 4
+    assert output["metadata"]["teacache_enabled"] is False
+    assert output["metadata"]["teacache_skipped_steps"] == 0
+
+
+def test_fastwam_native_teacache_requires_video_kv_cache() -> None:
+    torch = pytest.importorskip("torch")
+    from fastwam.models.wan22.fastwam import FastWAM
+
+    model = FastWAM.__new__(FastWAM)
+    torch.nn.Module.__init__(model)
+    model.device = torch.device("cpu")
+    model.torch_dtype = torch.float32
+    model.video_expert = SimpleNamespace(
+        video_attention_mask_mode="first_frame_causal",
+        fuse_vae_embedding_in_latents=False,
+    )
+    model.action_expert = SimpleNamespace(action_dim=2)
+    model.infer_action_scheduler = _StaticActionScheduler(torch)
+    model._encode_input_image_latents_tensor = lambda input_image, tiled=False: torch.zeros(
+        (1, 1, 1, 1, 1)
+    )
+    call_count = 0
+
+    def predict_action_noise_step(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        return torch.zeros_like(kwargs["latents_action"])
+
+    model._predict_action_noise_step = predict_action_noise_step
+
+    output = model.infer_action(
+        prompt=None,
+        input_image=torch.zeros((1, 3, 16, 16)),
+        action_horizon=4,
+        context=torch.zeros((1, 1, 2)),
+        context_mask=torch.ones((1, 1), dtype=torch.bool),
+        num_inference_steps=4,
+        seed=123,
+        cache_mode="recompute",
+        cuda_graph_mode="off",
+        teacache_mode="auto",
+    )
+
+    assert call_count == 4
+    assert output["metadata"]["teacache_enabled"] is False
+    assert output["metadata"]["teacache_mode"] == "auto"
+    assert output["metadata"]["teacache_skipped_steps"] == 0
+    assert output["metadata"]["teacache_fallback_reason"] == "requires_video_kv_cache"
+
+
 class _ModelRequiringNumVideoFrames:
     kwargs = None
 
@@ -729,6 +1242,50 @@ class _ModelRequiringNumVideoFrames:
                 "torch_compile_wall_ms": None,
             },
         }
+
+    def to(self, device):
+        return self
+
+    def eval(self):
+        return self
+
+
+class _StrictModelWithoutTeaCacheKwargs:
+    kwargs = None
+
+    def infer_action(
+        self,
+        *,
+        prompt,
+        input_image,
+        action_horizon,
+        num_video_frames,
+        cache_mode="video_kv",
+        num_inference_steps=0,
+        negative_prompt="",
+        text_cfg_scale=1.0,
+        proprio=None,
+        sigma_shift=None,
+        seed=None,
+        rand_device="cpu",
+        tiled=False,
+    ):
+        self.kwargs = {
+            "prompt": prompt,
+            "input_image": input_image,
+            "action_horizon": action_horizon,
+            "num_video_frames": num_video_frames,
+            "cache_mode": cache_mode,
+            "num_inference_steps": num_inference_steps,
+            "negative_prompt": negative_prompt,
+            "text_cfg_scale": text_cfg_scale,
+            "proprio": proprio,
+            "sigma_shift": sigma_shift,
+            "seed": seed,
+            "rand_device": rand_device,
+            "tiled": tiled,
+        }
+        return {"action": [[0.0] * 7], "metadata": {}}
 
     def to(self, device):
         return self
@@ -789,6 +1346,13 @@ class _ModelWithFastWAMTorchCompileHook:
         return {"action": [[0.0] * 7]}
 
 
+class _ModelWithFastWAMTeaCacheHook:
+    mot = _FastWAMCacheHookMot()
+
+    def infer_action(self, *, cache_mode="video_kv", teacache_mode="auto"):
+        return {"action": [[0.0] * 7]}
+
+
 class _ModelWithInferJoint:
     joint_kwargs = None
     action_called = False
@@ -839,6 +1403,19 @@ class _BatchFastWAMProcessor(_BoundFastWAMProcessor):
 class _ShapeOnly:
     def __init__(self, shape):
         self.shape = shape
+
+
+class _StaticActionScheduler:
+    def __init__(self, torch_module):
+        self.torch = torch_module
+
+    def build_inference_schedule(self, *, num_inference_steps, device, dtype, shift_override):
+        steps = self.torch.arange(num_inference_steps, 0, -1, device=device, dtype=dtype)
+        deltas = self.torch.zeros(num_inference_steps, device=device, dtype=dtype)
+        return steps, deltas
+
+    def step(self, pred_action, step_delta, latents_action):
+        return latents_action
 
 
 def _fastwam_cfg(*, visualize_future_video: bool = False, seed=None):

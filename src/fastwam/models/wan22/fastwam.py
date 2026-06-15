@@ -133,6 +133,80 @@ class _TorchCompileRequestStats:
         }
 
 
+@dataclass
+class _TeaCacheRequestStats:
+    mode: str
+    threshold: float | None
+    warmup_steps: int
+    layers: Any = None
+    enabled: bool = False
+    hook: str = "fastwam_teacache_action_step_output"
+    total_steps: int = 0
+    skipped_steps: int = 0
+    drift_score: float | None = None
+    fallback_reason: str | None = None
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        mode: str,
+        cache_mode: str,
+        threshold: float | None,
+        warmup_steps: int | None,
+        layers: Any,
+        batch_size: int,
+    ) -> "_TeaCacheRequestStats":
+        resolved_threshold = 0.05 if threshold is None else float(threshold)
+        resolved_warmup_steps = 1 if warmup_steps is None else int(warmup_steps)
+        enabled = mode != "off" and cache_mode == "video_kv" and batch_size == 1
+        fallback_reason = None
+        if mode != "off" and cache_mode != "video_kv":
+            fallback_reason = "requires_video_kv_cache"
+        elif mode != "off" and batch_size != 1:
+            fallback_reason = "batch_unsupported"
+        return cls(
+            mode=mode,
+            threshold=resolved_threshold if mode != "off" else threshold,
+            warmup_steps=max(0, resolved_warmup_steps),
+            layers=layers,
+            enabled=enabled,
+            fallback_reason=fallback_reason,
+        )
+
+    @property
+    def hit_rate(self) -> float:
+        if self.total_steps <= 0:
+            return 0.0
+        return float(self.skipped_steps) / float(self.total_steps)
+
+    def record_step(self, *, skipped: bool, drift_score: float | None) -> None:
+        self.total_steps += 1
+        if skipped:
+            self.skipped_steps += 1
+        self.drift_score = drift_score
+
+    def to_metadata(self) -> dict[str, Any]:
+        return {
+            "teacache_enabled": self.enabled,
+            "teacache_mode": self.mode,
+            "teacache_hook": self.hook,
+            "teacache_layers": self.layers,
+            "teacache_threshold": self.threshold,
+            "teacache_warmup_steps": self.warmup_steps,
+            "teacache_hit_rate": self.hit_rate,
+            "teacache_skipped_steps": self.skipped_steps,
+            "teacache_drift_score": self.drift_score,
+            "teacache_fallback_reason": self.fallback_reason,
+        }
+
+
+@dataclass
+class _TeaCacheStepCache:
+    latents_action: torch.Tensor | None = None
+    pred_action: torch.Tensor | None = None
+
+
 class FastWAM(torch.nn.Module):
     """MoT world model with video/action experts."""
 
@@ -918,6 +992,15 @@ class FastWAM(torch.nn.Module):
         )
         return compiled
 
+    @staticmethod
+    def _teacache_drift_score(
+        current_latents: torch.Tensor,
+        cached_latents: torch.Tensor,
+    ) -> float:
+        delta = (current_latents.float() - cached_latents.float()).abs().mean()
+        scale = cached_latents.float().abs().mean().clamp_min(1e-6)
+        return float((delta / scale).detach().item())
+
     def _action_body_graph_manager(self) -> ActionBodyCudaGraphManager:
         if self._action_body_cuda_graph_manager is None:
             self._action_body_cuda_graph_manager = ActionBodyCudaGraphManager()
@@ -1001,13 +1084,13 @@ class FastWAM(torch.nn.Module):
             timestep_action=timestep_action,
             context=context,
             context_mask=context_mask,
-                video_kv_cache=cache_state.kv_cache,
-                attention_mask=cache_state.attention_mask,
-                video_seq_len=cache_state.video_seq_len,
-                cuda_graph_stats=cuda_graph_stats,
-                torch_compile_stats=torch_compile_stats,
-                cuda_graph_shape_metadata=cuda_graph_shape_metadata,
-            )
+            video_kv_cache=cache_state.kv_cache,
+            attention_mask=cache_state.attention_mask,
+            video_seq_len=cache_state.video_seq_len,
+            cuda_graph_stats=cuda_graph_stats,
+            torch_compile_stats=torch_compile_stats,
+            cuda_graph_shape_metadata=cuda_graph_shape_metadata,
+        )
 
     @torch.no_grad()
     def infer_joint(
@@ -1208,6 +1291,10 @@ class FastWAM(torch.nn.Module):
         cache_mode: str = "video_kv",
         cuda_graph_mode: str = "off",
         torch_compile_mode: str = "off",
+        teacache_mode: str = "off",
+        teacache_threshold: float | None = None,
+        teacache_warmup_steps: int | None = None,
+        teacache_layers: Any = None,
     ) -> dict[str, Any]:
         self.eval()
         if cache_mode not in {"video_kv", "recompute"}:
@@ -1224,6 +1311,11 @@ class FastWAM(torch.nn.Module):
             raise ValueError(
                 "`torch_compile_mode` must be one of: off, auto, default, "
                 f"reduce-overhead, max-autotune; got {torch_compile_mode!r}."
+            )
+        if teacache_mode not in {"off", "auto"}:
+            raise ValueError(
+                "`teacache_mode` must be one of: off, auto; "
+                f"got {teacache_mode!r}."
             )
         if str(getattr(self.video_expert, "video_attention_mask_mode", "")) != "first_frame_causal":
             raise ValueError(
@@ -1336,11 +1428,20 @@ class FastWAM(torch.nn.Module):
             mode=torch_compile_mode,
             cache_mode=cache_mode,
         )
+        teacache_stats = _TeaCacheRequestStats.create(
+            mode=teacache_mode,
+            cache_mode=cache_mode,
+            threshold=teacache_threshold,
+            warmup_steps=teacache_warmup_steps,
+            layers=teacache_layers,
+            batch_size=batch_size,
+        )
         cuda_graph_shape_metadata = {
             "cache_mode": cache_mode,
             "torch_compile_mode": (
                 torch_compile_stats.mode if torch_compile_stats.enabled else "off"
             ),
+            "teacache_mode": teacache_stats.mode if teacache_stats.enabled else "off",
             "image_hw": [int(height), int(width)],
             "batch_size": int(batch_size),
             "action_horizon": int(action_horizon),
@@ -1360,21 +1461,47 @@ class FastWAM(torch.nn.Module):
             shift_override=sigma_shift,
         )
         denoise_start = time.perf_counter()
-        for step_t_action, step_delta_action in zip(infer_timesteps_action, infer_deltas_action):
+        teacache_step_cache = _TeaCacheStepCache()
+        for step_index, (step_t_action, step_delta_action) in enumerate(
+            zip(infer_timesteps_action, infer_deltas_action)
+        ):
             timestep_action = step_t_action.expand(batch_size).to(dtype=latents_action.dtype, device=self.device)
 
-            pred_action = self._predict_action_noise_step(
-                first_frame_latents=first_frame_latents,
-                latents_action=latents_action,
-                timestep_action=timestep_action,
-                context=context,
-                context_mask=context_mask,
-                fuse_vae_embedding_in_latents=fuse_flag,
-                cache_state=cache_state,
-                cuda_graph_stats=cuda_graph_stats,
-                torch_compile_stats=torch_compile_stats,
-                cuda_graph_shape_metadata=cuda_graph_shape_metadata,
-            )
+            drift_score = None
+            use_teacache = False
+            if (
+                teacache_stats.enabled
+                and teacache_step_cache.latents_action is not None
+                and teacache_step_cache.pred_action is not None
+                and step_index >= teacache_stats.warmup_steps
+            ):
+                drift_score = self._teacache_drift_score(
+                    latents_action,
+                    teacache_step_cache.latents_action,
+                )
+                use_teacache = drift_score <= float(teacache_stats.threshold)
+
+            if use_teacache:
+                pred_action = teacache_step_cache.pred_action
+            else:
+                pred_action = self._predict_action_noise_step(
+                    first_frame_latents=first_frame_latents,
+                    latents_action=latents_action,
+                    timestep_action=timestep_action,
+                    context=context,
+                    context_mask=context_mask,
+                    fuse_vae_embedding_in_latents=fuse_flag,
+                    cache_state=cache_state,
+                    cuda_graph_stats=cuda_graph_stats,
+                    torch_compile_stats=torch_compile_stats,
+                    cuda_graph_shape_metadata=cuda_graph_shape_metadata,
+                )
+                if teacache_stats.enabled:
+                    teacache_step_cache = _TeaCacheStepCache(
+                        latents_action=latents_action.detach().clone(),
+                        pred_action=pred_action.detach().clone(),
+                    )
+            teacache_stats.record_step(skipped=use_teacache, drift_score=drift_score)
             latents_action = self.infer_action_scheduler.step(pred_action, step_delta_action, latents_action)
         denoise_wall_ms = (time.perf_counter() - denoise_start) * 1000
         action_out = latents_action.detach().to(device="cpu", dtype=torch.float32)
@@ -1399,6 +1526,7 @@ class FastWAM(torch.nn.Module):
                 "cache_bytes": cache_state.cache_bytes if cache_state is not None else None,
                 **cuda_graph_stats.to_metadata(),
                 **torch_compile_stats.to_metadata(),
+                **teacache_stats.to_metadata(),
             },
         }
 

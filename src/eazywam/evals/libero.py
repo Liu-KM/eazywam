@@ -859,7 +859,15 @@ def _runtime_options(context: _EvalContext) -> dict[str, object]:
     options: dict[str, object] = {}
     if context.num_inference_steps is not None:
         options["num_inference_steps"] = context.num_inference_steps
-    for key in ("dit_cache_mode", "cuda_graph_mode", "torch_compile_mode"):
+    for key in (
+        "dit_cache_mode",
+        "cuda_graph_mode",
+        "torch_compile_mode",
+        "teacache_mode",
+        "teacache_threshold",
+        "teacache_warmup_steps",
+        "teacache_layers",
+    ):
         if context.values.get(key) is not None:
             options[key] = context.values[key]
     return options

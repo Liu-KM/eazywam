@@ -88,6 +88,185 @@ def test_compare_traces_reports_faster_variant(tmp_path) -> None:
     assert summary.relative_change < 0
 
 
+def test_compare_traces_reports_prefix_action_drift_for_count_mismatch(tmp_path) -> None:
+    baseline = tmp_path / "baseline" / "trace.jsonl"
+    variant = tmp_path / "variant" / "trace.jsonl"
+    write_trace(
+        baseline,
+        [
+            event(
+                "base",
+                "inference_end",
+                action_chunk_shape=[3, 4],
+                action_summary={"finite": True, "mean": 1.0, "min": 0.0, "max": 2.0},
+                timing={"wall_ms": 10.0},
+            ),
+            event(
+                "base",
+                "inference_end",
+                action_chunk_shape=[3, 4],
+                action_summary={"finite": True, "mean": 3.0, "min": 2.0, "max": 4.0},
+                timing={"wall_ms": 10.0},
+            ),
+        ],
+    )
+    write_trace(
+        variant,
+        [
+            event(
+                "var",
+                "inference_end",
+                action_chunk_shape=[3, 4],
+                action_summary={"finite": True, "mean": 1.1, "min": 0.1, "max": 2.1},
+                timing={"wall_ms": 5.0},
+            ),
+        ],
+    )
+
+    summary = compare_traces(baseline.parent, variant.parent, min_effect=0.05)
+    payload = summary.to_dict()
+
+    assert summary.decision == "invalid"
+    assert summary.output_gate == "action_shape_finite_drift"
+    assert summary.output_gate_passed is False
+    assert "action summary count mismatch" in summary.warnings
+    assert payload["output_gate_details"]["reason"] == "action count mismatch"
+    assert payload["output_gate_details"]["baseline_count"] == 2
+    assert payload["output_gate_details"]["variant_count"] == 1
+    assert payload["output_gate_details"]["paired_count"] == 1
+    assert payload["output_gate_details"]["observed"]["mean"] == pytest.approx(0.1)
+    assert payload["metric_comparisons"]["latency_ms.mean"]["speedup"] == 2.0
+
+
+def test_compare_traces_summarizes_teacache_backend_metadata(tmp_path) -> None:
+    baseline = tmp_path / "baseline" / "trace.jsonl"
+    variant = tmp_path / "variant" / "trace.jsonl"
+    write_trace(
+        baseline,
+        [
+            event(
+                "base",
+                "inference_end",
+                action_chunk_shape=[3, 4],
+                timing={"wall_ms": 10.0},
+                backend_metadata={
+                    "denoise_wall_ms": 8.0,
+                    "teacache_enabled": False,
+                    "teacache_hit_rate": 0.0,
+                    "teacache_skipped_steps": 0,
+                    "teacache_fallback_reason": None,
+                },
+            ),
+            event(
+                "base",
+                "inference_end",
+                action_chunk_shape=[3, 4],
+                timing={"wall_ms": 11.0},
+                backend_metadata={
+                    "denoise_wall_ms": 10.0,
+                    "teacache_enabled": False,
+                    "teacache_hit_rate": 0.0,
+                    "teacache_skipped_steps": 0,
+                    "teacache_fallback_reason": None,
+                },
+            )
+        ],
+    )
+    write_trace(
+        variant,
+        [
+            event(
+                "var",
+                "inference_end",
+                action_chunk_shape=[3, 4],
+                timing={"wall_ms": 6.0},
+                backend_metadata={
+                    "denoise_wall_ms": 4.0,
+                    "teacache_enabled": True,
+                    "teacache_hit_rate": 0.5,
+                    "teacache_skipped_steps": 5,
+                    "teacache_drift_score": 0.01,
+                    "teacache_fallback_reason": None,
+                },
+            ),
+            event(
+                "var",
+                "inference_end",
+                action_chunk_shape=[3, 4],
+                timing={"wall_ms": 5.0},
+                backend_metadata={
+                    "denoise_wall_ms": 5.0,
+                    "teacache_enabled": True,
+                    "teacache_hit_rate": 0.7,
+                    "teacache_skipped_steps": 7,
+                    "teacache_drift_score": 0.02,
+                    "teacache_fallback_reason": "requires_video_kv_cache",
+                },
+            ),
+        ],
+    )
+
+    summary = compare_traces(baseline.parent, variant.parent, min_effect=0.05)
+    payload = summary.to_dict()
+
+    assert summary.decision == "faster"
+    assert payload["baseline"]["backend_metadata"]["teacache_hit_rate"]["mean"] == 0.0
+    assert payload["variant"]["backend_metadata"]["teacache_hit_rate"]["mean"] == pytest.approx(0.6)
+    assert payload["variant"]["backend_metadata"]["teacache_skipped_steps"]["mean"] == 6.0
+    assert payload["variant"]["backend_metadata"]["teacache_drift_score"]["p95"] == 0.02
+    assert "teacache_enabled" not in payload["variant"]["backend_metadata"]
+    assert payload["metric_comparisons"]["latency_ms.mean"]["speedup"] == pytest.approx(
+        10.5 / 5.5
+    )
+    assert payload["metric_comparisons"]["backend_metadata.denoise_wall_ms.mean"][
+        "speedup"
+    ] == 2.0
+    assert payload["metric_comparisons"]["backend_metadata.teacache_hit_rate.mean"][
+        "relative_change"
+    ] is None
+    assert payload["variant"]["backend_metadata_values"]["teacache_fallback_reason"] == {
+        "count": 1,
+        "values": ["requires_video_kv_cache"],
+    }
+    assert "teacache_enabled" not in payload["variant"]["backend_metadata_values"]
+
+
+def test_compare_traces_summarizes_eval_metrics(tmp_path) -> None:
+    baseline = tmp_path / "baseline" / "trace.jsonl"
+    variant = tmp_path / "variant" / "trace.jsonl"
+    write_trace(
+        baseline,
+        [
+            event("base", "native_eval_end", successes=4, total_episodes=5, success_rate=0.8),
+            event("base", "external_eval_end", metrics={"overall": {"clean_mean_success_rate": 0.8}}),
+        ],
+    )
+    write_trace(
+        variant,
+        [
+            event("var", "native_eval_end", successes=5, total_episodes=5, success_rate=1.0),
+            event("var", "external_eval_end", metrics={"overall": {"clean_mean_success_rate": 1.0}}),
+        ],
+    )
+
+    summary = compare_traces(baseline.parent, variant.parent)
+    payload = summary.to_dict()
+
+    assert payload["baseline"]["eval_metrics"]["success_rate"]["mean"] == 0.8
+    assert payload["baseline"]["eval_metrics"]["successes"]["mean"] == 4.0
+    assert "schema_version" not in payload["baseline"]["eval_metrics"]
+    assert payload["variant"]["eval_metrics"]["success_rate"]["mean"] == 1.0
+    success_rate_comparison = payload["metric_comparisons"]["eval_metrics.success_rate.mean"]
+    assert success_rate_comparison["baseline_mean"] == 0.8
+    assert success_rate_comparison["variant_mean"] == 1.0
+    assert success_rate_comparison["relative_change"] == pytest.approx(0.25)
+    assert success_rate_comparison["speedup"] is None
+    assert (
+        payload["variant"]["eval_metrics"]["overall.clean_mean_success_rate"]["mean"]
+        == 1.0
+    )
+
+
 def test_compare_traces_allows_profile_change_under_same_runtime_contract(tmp_path) -> None:
     baseline = tmp_path / "baseline.jsonl"
     variant = tmp_path / "variant.jsonl"

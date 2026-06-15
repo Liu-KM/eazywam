@@ -313,6 +313,8 @@ events may report `requested` or `planned`, while post-load events may report
 `applied`, `fallback`, `disabled`, or `unsupported_by_manifest`.
 
 Profile-specific params live under `optimizations.profiles.<name>.params`.
+Descriptive metadata such as `family` and `scope` lives next to `params`; it is
+for model entry display, docs, and release review, not backend runtime kwargs.
 If `optimizations.profiles.<name>.enabled` is `true`, the profile is part of the
 model entry's default runtime profile set. Users do not need to pass `--opt`
 for that profile to be planned, traced, and applied by run/serve/native eval
@@ -325,8 +327,10 @@ For FastWAM, `dit_cache.params.mode` is `video_kv` by default and may be set
 to `recompute` for request-local cache ablation. The public profile remains
 `dit_cache`; the backend hook name is `fastwam_video_kv_cache`.
 This `dit_cache` profile is FastWAM's native request-local video K/V cache. It
-is separate from the future `teacache` profile, which represents timestep-aware
-feature caching for video DiT/WAM paths.
+is separate from `teacache`, which is FastWAM's opt-in approximate feature-cache
+profile for action denoise. TeaCache L1 is disabled by default, request-local,
+action-only, and only applies on the `dit_cache.mode=video_kv` path until
+SuperPod measurements justify broader rollout.
 FastWAM also exposes `cuda_graph` as a default `auto` profile. Its first
 supported capture target is `params.capture: action_body`, which attempts to
 graph only `mot.forward_action_with_video_cache()` when

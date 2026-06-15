@@ -27,6 +27,9 @@ class TraceStats:
     action_summaries: list[dict[str, Any]]
     future_frames: list[dict[str, Any]]
     values: list[Any]
+    backend_metadata_summary: dict[str, dict[str, float | int | None]]
+    backend_metadata_values: dict[str, dict[str, object]]
+    eval_metrics_summary: dict[str, dict[str, float | int | None]]
     errors: list[str]
 
     def latency_summary(self) -> dict[str, float | int | None]:
@@ -47,6 +50,9 @@ class TraceStats:
             "action_summaries": self.action_summaries,
             "future_frames": self.future_frames,
             "values": self.values,
+            "backend_metadata": self.backend_metadata_summary,
+            "backend_metadata_values": self.backend_metadata_values,
+            "eval_metrics": self.eval_metrics_summary,
             "errors": self.errors,
         }
 
@@ -63,6 +69,7 @@ class CompareSummary:
     runtime_contract_gate: str
     runtime_contract_gate_passed: bool | None
     runtime_contract_gate_details: dict[str, object]
+    metric_comparisons: dict[str, dict[str, float | None]]
     decision: str
     warnings: list[str]
 
@@ -78,6 +85,7 @@ class CompareSummary:
             "runtime_contract_gate": self.runtime_contract_gate,
             "runtime_contract_gate_passed": self.runtime_contract_gate_passed,
             "runtime_contract_gate_details": self.runtime_contract_gate_details,
+            "metric_comparisons": self.metric_comparisons,
             "decision": self.decision,
             "warnings": self.warnings,
         }
@@ -110,7 +118,13 @@ def compare_traces(
         if output_gate == "action_shape_and_finite":
             warnings.append("action summary contains non-finite values")
         elif output_gate == "action_shape_finite_drift":
-            warnings.append("action summary drift exceeds tolerance")
+            if output_gate_details.get("reason") in {
+                "action count mismatch",
+                "action summary count mismatch",
+            }:
+                warnings.append("action summary count mismatch")
+            else:
+                warnings.append("action summary drift exceeds tolerance")
         elif output_gate == "action_shape_future_value_match":
             warnings.append("future/value output mismatch")
         else:
@@ -155,6 +169,7 @@ def compare_traces(
         runtime_contract_gate=contract_gate,
         runtime_contract_gate_passed=contract_gate_passed,
         runtime_contract_gate_details=contract_gate_details,
+        metric_comparisons=_metric_comparisons(baseline_stats, variant_stats),
         decision=decision,
         warnings=warnings,
     )
@@ -177,6 +192,9 @@ def load_trace_stats(path: str | Path) -> TraceStats:
     future_frames = [summary for summary in future_frames if summary is not None]
     values = [_value_output(event) for event in events]
     values = [value for value in values if value is not None]
+    backend_metadata_summary = _backend_metadata_summary(events)
+    backend_metadata_values = _backend_metadata_values(events)
+    eval_metrics_summary = _eval_metrics_summary(events)
     errors = [
         str(event.get("message") or event.get("error_type") or "error")
         for event in events
@@ -202,6 +220,9 @@ def load_trace_stats(path: str | Path) -> TraceStats:
         action_summaries=action_summaries,
         future_frames=future_frames,
         values=values,
+        backend_metadata_summary=backend_metadata_summary,
+        backend_metadata_values=backend_metadata_values,
+        eval_metrics_summary=eval_metrics_summary,
         errors=errors,
     )
 
@@ -326,6 +347,144 @@ def _value_output(event: dict[str, Any]) -> Any | None:
     return str(raw)
 
 
+def _backend_metadata_summary(
+    events: list[dict[str, Any]],
+) -> dict[str, dict[str, float | int | None]]:
+    samples: dict[str, list[float]] = {}
+    for event in events:
+        if event.get("event") not in {"inference_end", "serve_request_end"}:
+            continue
+        raw = event.get("backend_metadata")
+        if not isinstance(raw, dict):
+            continue
+        for key, value in raw.items():
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int | float) and math.isfinite(float(value)):
+                samples.setdefault(str(key), []).append(float(value))
+    return {key: _numeric_summary(values) for key, values in sorted(samples.items())}
+
+
+def _backend_metadata_values(events: list[dict[str, Any]]) -> dict[str, dict[str, object]]:
+    samples: dict[str, list[str]] = {}
+    for event in events:
+        if event.get("event") not in {"inference_end", "serve_request_end"}:
+            continue
+        raw = event.get("backend_metadata")
+        if not isinstance(raw, dict):
+            continue
+        for key, value in raw.items():
+            if value is None or isinstance(value, bool | int | float | dict | list):
+                continue
+            samples.setdefault(str(key), []).append(str(value))
+    return {
+        key: {"count": len(values), "values": sorted(set(values))}
+        for key, values in sorted(samples.items())
+    }
+
+
+def _metric_comparisons(
+    baseline: TraceStats,
+    variant: TraceStats,
+) -> dict[str, dict[str, float | None]]:
+    baseline_metrics = _mean_metrics(baseline)
+    variant_metrics = _mean_metrics(variant)
+    comparisons: dict[str, dict[str, float | None]] = {}
+    for key in sorted(set(baseline_metrics) & set(variant_metrics)):
+        baseline_mean = baseline_metrics[key]
+        variant_mean = variant_metrics[key]
+        relative_change = None
+        speedup = None
+        if baseline_mean > 0:
+            relative_change = (variant_mean - baseline_mean) / baseline_mean
+            if variant_mean > 0 and _lower_is_better_metric(key):
+                speedup = baseline_mean / variant_mean
+        comparisons[key] = {
+            "baseline_mean": baseline_mean,
+            "variant_mean": variant_mean,
+            "relative_change": relative_change,
+            "speedup": speedup,
+        }
+    return comparisons
+
+
+def _mean_metrics(stats: TraceStats) -> dict[str, float]:
+    metrics: dict[str, float] = {}
+    latency_mean = stats.latency_summary().get("mean")
+    if isinstance(latency_mean, int | float):
+        metrics["latency_ms.mean"] = float(latency_mean)
+    for prefix, summaries in (
+        ("backend_metadata", stats.backend_metadata_summary),
+        ("eval_metrics", stats.eval_metrics_summary),
+    ):
+        for name, summary in summaries.items():
+            value = summary.get("mean")
+            if isinstance(value, int | float):
+                metrics[f"{prefix}.{name}.mean"] = float(value)
+    return metrics
+
+
+def _lower_is_better_metric(name: str) -> bool:
+    return (
+        name == "latency_ms.mean"
+        or name.endswith("_wall_ms.mean")
+        or name.endswith(".wall_ms.mean")
+        or name.endswith("_ms.mean")
+    )
+
+
+def _eval_metrics_summary(
+    events: list[dict[str, Any]],
+) -> dict[str, dict[str, float | int | None]]:
+    samples: dict[str, list[float]] = {}
+    for event in events:
+        if event.get("event") == "native_eval_end":
+            metrics = {
+                key: value
+                for key, value in event.items()
+                if key not in _COMMON_EVENT_KEYS
+            }
+            _collect_numeric_metrics(metrics, samples)
+        elif event.get("event") == "external_eval_end":
+            metrics = event.get("metrics")
+            if isinstance(metrics, dict):
+                _collect_numeric_metrics(metrics, samples)
+    return {key: _numeric_summary(values) for key, values in sorted(samples.items())}
+
+
+def _collect_numeric_metrics(
+    raw: dict[str, Any],
+    samples: dict[str, list[float]],
+    *,
+    prefix: str = "",
+) -> None:
+    for key, value in raw.items():
+        metric_key = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int | float) and math.isfinite(float(value)):
+            samples.setdefault(metric_key, []).append(float(value))
+        elif isinstance(value, dict):
+            _collect_numeric_metrics(value, samples, prefix=metric_key)
+
+
+_COMMON_EVENT_KEYS = {
+    "schema_version",
+    "event",
+    "timestamp",
+    "run_id",
+    "manifest_id",
+    "backend",
+    "processor",
+    "model_name",
+    "source_repo",
+    "mode",
+    "episode_id",
+    "step_id",
+    "replan_id",
+}
+
+
 def _numeric_summary(samples: list[float]) -> dict[str, float | int | None]:
     if not samples:
         return {"count": 0, "mean": None, "p50": None, "p95": None}
@@ -353,6 +512,26 @@ def _output_gate(
         return "action_shape_unavailable", None, {}
     shape_match = baseline.action_shapes == variant.action_shapes
     if not shape_match:
+        paired_count = min(len(baseline.action_shapes), len(variant.action_shapes))
+        paired_shapes_match = (
+            paired_count > 0
+            and baseline.action_shapes[:paired_count] == variant.action_shapes[:paired_count]
+        )
+        if paired_shapes_match and baseline.action_summaries and variant.action_summaries:
+            details: dict[str, object] = {
+                "reason": "action count mismatch",
+                "baseline_count": len(baseline.action_shapes),
+                "variant_count": len(variant.action_shapes),
+                "paired_count": paired_count,
+            }
+            baseline_paired = baseline.action_summaries[:paired_count]
+            variant_paired = variant.action_summaries[:paired_count]
+            if _all_actions_finite(baseline_paired) and _all_actions_finite(variant_paired):
+                drift = _action_summary_drift(baseline_paired, variant_paired)
+                if drift:
+                    details["max_action_drift"] = max_action_drift
+                    details["observed"] = drift
+            return "action_shape_finite_drift", False, details
         return "action_shape_match", False, {
             "baseline_shapes": baseline.action_shapes,
             "variant_shapes": variant.action_shapes,

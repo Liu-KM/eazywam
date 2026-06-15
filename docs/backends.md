@@ -245,7 +245,8 @@ wam eval fastwam-libero \
   --set num_inference_steps=20 \
   --set dit_cache_mode=video_kv \
   --set cuda_graph_mode=off \
-  --trace-dir /path/to/traces/fastwam-libero-eager-cache
+  --trace-dir /path/to/traces/fastwam-libero-eager-cache \
+  --summary-path /path/to/reports/fastwam-libero-eager-cache-summary.json
 
 wam eval fastwam-libero \
   --workload libero-single-task \
@@ -286,6 +287,112 @@ FastWAM LIBERO `task_id=0`, `num_trials=1`, `num_inference_steps=10`, and
 `total_ms`, `2.38x` mean `denoise_wall_ms` over eager cached execution), while
 the `torch_compile` combination hit `call_failed:InductorError` fallback and
 large first-request latency. That profile remains opt-in and experimental.
+
+FastWAM now exposes `teacache` as a disabled-by-default approximate
+`feature_cache` profile for action-only inference. It is separate from
+`dit_cache(video_kv)`: `dit_cache` is exact video K/V reuse, while TeaCache L1
+skips expensive action denoise body calls by reusing a recent step output when
+the request-local action latent drift score stays below threshold. The first
+implementation only runs on `dit_cache_mode=video_kv`; `recompute` and batch
+paths fall back or disable TeaCache. For first measurements, compare against the
+eager cached baseline with `cuda_graph_mode=off`:
+
+```bash
+scripts/fastwam-teacache-l1-superpod.sh
+scripts/fastwam-teacache-l1-superpod.sh --execute \
+  --cache-dir /path/to/wam-cache \
+  --trace-root /path/to/traces/fastwam-teacache-l1 \
+  --report-root /path/to/reports/fastwam-teacache-l1 \
+  --run-id teacache-l1-YYYYMMDD
+```
+
+The helper is scheduler-agnostic. The explicit command shape is:
+
+```bash
+wam eval fastwam-libero \
+  --workload libero-single-task \
+  --task-id 0 \
+  --num-trials 5 \
+  --set seed=42 \
+  --set num_inference_steps=20 \
+  --set dit_cache_mode=video_kv \
+  --set cuda_graph_mode=off \
+  --trace-dir /path/to/traces/fastwam-libero-eager-cache \
+  --summary-path /path/to/reports/fastwam-libero-eager-cache-summary.json
+
+wam eval fastwam-libero \
+  --workload libero-single-task \
+  --task-id 0 \
+  --num-trials 5 \
+  --opt teacache \
+  --set seed=42 \
+  --set num_inference_steps=20 \
+  --set dit_cache_mode=video_kv \
+  --set cuda_graph_mode=off \
+  --set teacache_threshold=0.05 \
+  --set teacache_warmup_steps=1 \
+  --trace-dir /path/to/traces/fastwam-libero-teacache \
+  --summary-path /path/to/reports/fastwam-libero-teacache-summary.json
+```
+
+For RoboTwin, keep the task and episode settings fixed:
+
+```bash
+wam eval fastwam-robotwin \
+  --workload robotwin-single-task \
+  --task-name click_alarmclock \
+  --num-episodes 5 \
+  --set task_config=demo_randomized \
+  --set seed=42 \
+  --set num_inference_steps=20 \
+  --set dit_cache_mode=video_kv \
+  --set cuda_graph_mode=off \
+  --trace-dir /path/to/traces/fastwam-robotwin-eager-cache \
+  --summary-path /path/to/reports/fastwam-robotwin-eager-cache-summary.json
+
+wam eval fastwam-robotwin \
+  --workload robotwin-single-task \
+  --task-name click_alarmclock \
+  --num-episodes 5 \
+  --set task_config=demo_randomized \
+  --opt teacache \
+  --set seed=42 \
+  --set num_inference_steps=20 \
+  --set dit_cache_mode=video_kv \
+  --set cuda_graph_mode=off \
+  --set teacache_threshold=0.05 \
+  --set teacache_warmup_steps=1 \
+  --trace-dir /path/to/traces/fastwam-robotwin-teacache \
+  --summary-path /path/to/reports/fastwam-robotwin-teacache-summary.json
+```
+
+Use `wam compare` on the recorded baseline/candidate traces:
+
+```bash
+wam compare \
+  /path/to/traces/fastwam-libero-eager-cache/<run>/trace.jsonl \
+  /path/to/traces/fastwam-libero-teacache/<run>/trace.jsonl \
+  --max-action-drift 0.001
+
+wam compare \
+  /path/to/traces/fastwam-robotwin-eager-cache/<run>/trace.jsonl \
+  /path/to/traces/fastwam-robotwin-teacache/<run>/trace.jsonl \
+  --max-action-drift 0.001
+```
+
+Report `metric_comparisons["latency_ms.mean"].speedup`,
+`metric_comparisons["backend_metadata.denoise_wall_ms.mean"].speedup`,
+`backend_metadata.teacache_hit_rate`,
+`backend_metadata.teacache_skipped_steps`,
+`backend_metadata.teacache_drift_score`, `eval_metrics.success_rate`, action
+drift from `output_gate_details`, and any non-null
+`backend_metadata_values.teacache_fallback_reason`. A fallback value such as
+`requires_video_kv_cache`, `batch_unsupported`, or `teacache_hook_unavailable`
+means the TeaCache speedup claim is unsupported for that run. Do not claim
+parity or speedup until SuperPod traces and simulator result files support those
+numbers.
+Use `docs/fastwam_teacache_l1_report.md` as the versioned report template for
+the required LIBERO and RoboTwin evidence.
 
 Record trace files, runtime metadata, success rate, model call count, duration,
 warnings, and the cache metadata fields from `inference_end`. If RoboTwin

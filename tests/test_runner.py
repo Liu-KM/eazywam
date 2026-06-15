@@ -95,6 +95,10 @@ def test_runner_traces_future_and_value_outputs(tmp_path) -> None:
         "artifact_path": "future/frames.json",
     }
     assert inference_end["value"] == {"score": 0.75}
+    assert inference_end["backend_metadata"] == {
+        "teacache_hit_rate": 0.5,
+        "teacache_skipped_steps": 2,
+    }
 
 
 def test_runner_invocation_attaches_registry_processor(tmp_path) -> None:
@@ -248,6 +252,10 @@ class FutureValueBackend:
                 "artifact_path": "future/frames.json",
             },
             value={"score": 0.75},
+            backend_metadata={
+                "teacache_hit_rate": 0.5,
+                "teacache_skipped_steps": 2,
+            },
         )
 
     def runtime_info(self) -> RuntimeInfo:
@@ -336,6 +344,13 @@ def test_runner_maps_reference_entry_to_native_input_observation(tmp_path) -> No
             prompt="external observation",
             session={"session_id": "input"},
         ),
+        runtime_options={
+            "dit_cache_mode": "video_kv",
+            "teacache_mode": "auto",
+            "teacache_threshold": 0.05,
+            "teacache_warmup_steps": 1,
+            "cuda_graph_mode": "off",
+        },
     )
 
     assert summary.steps == 1
@@ -352,6 +367,13 @@ def test_runner_maps_reference_entry_to_native_input_observation(tmp_path) -> No
     assert created[0].last_request.observation.prompt == "external observation"
     assert created[0].last_request.action_horizon == 32
     assert created[0].last_request.replan_steps == 10
+    assert created[0].last_request.runtime_options == {
+        "dit_cache_mode": "video_kv",
+        "teacache_mode": "auto",
+        "teacache_threshold": 0.05,
+        "teacache_warmup_steps": 1,
+        "cuda_graph_mode": "off",
+    }
 
     events = read_events(summary.trace_path)
     event_names = [event["event"] for event in events]
@@ -369,6 +391,7 @@ def test_runner_maps_reference_entry_to_native_input_observation(tmp_path) -> No
         "dit_cache",
         "cuda_graph",
         "torch_compile",
+        "teacache",
     ]
     assert contract["optimization_profile_status"] == [
         {

@@ -350,12 +350,26 @@ def test_serve_maps_reference_entry_to_native_backend(tmp_path) -> None:
                 "images": {"primary": [[[1, 1, 1]]], "wrist": [[[2, 2, 2]]]},
                 "state": {"proprio": [0.0]},
                 "prompt": "native serve request",
-            }
+            },
+            "runtime_options": {
+                "dit_cache_mode": "video_kv",
+                "teacache_mode": "auto",
+                "teacache_threshold": 0.05,
+                "teacache_warmup_steps": 1,
+                "cuda_graph_mode": "off",
+            },
         }
     )
     assert created[0].last_request is not None
     assert created[0].last_request.action_horizon == 32
     assert created[0].last_request.replan_steps == 10
+    assert created[0].last_request.runtime_options == {
+        "dit_cache_mode": "video_kv",
+        "teacache_mode": "auto",
+        "teacache_threshold": 0.05,
+        "teacache_warmup_steps": 1,
+        "cuda_graph_mode": "off",
+    }
     app.close()
     events = read_events(app.trace_path)
     contract = [event for event in events if event["event"] == "runtime_contract"][0]
