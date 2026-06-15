@@ -29,6 +29,9 @@ The schema is operational: it explains what happened during a run and gives
 - `serve_start`
 - `serve_ready`
 - `serve_request_start`
+- `batch_request_enqueued`
+- `batch_dispatch_start`
+- `batch_dispatch_end`
 - `serve_request_end`
 - `backend_close`
 - `error`
@@ -59,7 +62,8 @@ Every event should include:
 - `processor`
 - `model_name`
 - `source_repo`
-- `mode`: `local`, `remote`, `fake`, `run`, `native_smoke`, or `serve`
+- `mode`: `local`, `remote`, `fake`, `run`, `native_smoke`,
+  `simulator_eval`, or `serve`
 
 Workload events may also include:
 
@@ -162,6 +166,9 @@ metadata:
 - `cache_prefill_wall_ms`
 - `denoise_wall_ms`
 - `cache_bytes`
+- `fastwam_batch_size`
+- `batch_shape_key`
+- `batch_cuda_graph_enabled`
 
 For `serve` mode, startup emits backend load/warmup/reset events before
 `serve_ready`. Each `/infer` request emits `serve_request_start` and
@@ -169,6 +176,31 @@ For `serve` mode, startup emits backend load/warmup/reset events before
 requests also emit an `error` event and a failed `serve_request_end`. Startup
 failures emit an `error` event and `backend_close` so resident serve failures
 are traceable.
+
+When `wam serve --batch` is enabled, the resident server also emits dynamic
+batching events:
+
+- `batch_request_enqueued` when a request enters the server-side queue.
+- `batch_dispatch_start` when the dispatcher closes a batch because it reached
+  `max_batch_size` or `max_wait_time`.
+- `batch_dispatch_end` with `status="ok"` or `status="error"`.
+
+Each batched `serve_request_end` should include:
+
+- `batch_id`
+- `request_id`
+- `batch_size`
+- `queue_wait_ms`
+- `dispatch_ms`
+- `per_request_model_ms`
+- `batch_fallback_reason`
+
+`batch_fallback_reason=null` means the backend batch path ran. A non-null
+reason means the server still grouped requests but the backend fell back to
+single-request execution. FastWAM true batch requests should include
+`backend_metadata.fastwam_batch_size > 1` and
+`backend_metadata.batch_cuda_graph_enabled=false`; CUDA Graph is intentionally
+disabled for dynamic batch sizes in the first implementation.
 
 For `native_smoke` workloads, `model_calls` should be `1` on success and
 `steps` should be `0` because the command validates the backend lifecycle with a
@@ -218,7 +250,8 @@ Native simulator evals use the same backend lifecycle and `inference_end`
 events as `wam run`, plus simulator-specific orchestration events:
 
 - `native_eval_plan` with the eval runner name, workload, task id, trial count,
-  action horizon, replan steps, and planned command summary.
+  action horizon, replan steps, shard id, shard count, selected episode
+  indices, batch endpoint when present, and planned command summary.
 - `episode_start` / `episode_end` for each simulator episode.
 - `replan_start` and `inference_start` before every model call.
 - `simulator_wait_step` for optional no-op stabilization steps.

@@ -280,6 +280,48 @@ def test_fastwam_native_backend_matches_official_infer_action_kwargs() -> None:
     assert result.backend_metadata["fastwam_call"] == "infer_action"
 
 
+def test_fastwam_native_backend_infer_batch_calls_model_once() -> None:
+    registry = default_registry()
+    data = load_builtin_manifest("fastwam-libero").to_dict()
+    data["backend"] = {"name": "fastwam", "mode": "native", "config": {}}
+    manifest = manifest_from_dict(data)
+    profiles = registry.build_optimization_profiles(manifest, ["cuda_graph"])
+    backend = registry.create_backend(manifest, profiles)
+    model = _BatchModel()
+    backend.model = model
+    backend.processor = _BatchFastWAMProcessor()
+    backend.cfg = _fastwam_cfg(seed=None)
+    backend.loaded = True
+    backend.warmed = True
+    backend.no_grad = lambda: nullcontext()
+
+    results = backend.infer_batch(
+        [
+            InferenceRequest(
+                observation=Observation(images={}, prompt="open the drawer"),
+                action_horizon=32,
+                replan_steps=10,
+            ),
+            InferenceRequest(
+                observation=Observation(images={}, prompt="close the drawer"),
+                action_horizon=32,
+                replan_steps=10,
+            ),
+        ]
+    )
+
+    assert len(results) == 2
+    assert model.call_count == 1
+    assert model.kwargs["prompt"] == ["prompt: open the drawer", "prompt: close the drawer"]
+    assert model.kwargs["cuda_graph_mode"] == "off"
+    assert results[0].action_chunk.actions == [[0.0] * 7]
+    assert results[1].action_chunk.actions == [[1.0] * 7]
+    assert results[0].backend_metadata["fastwam_batch_size"] == 2
+    assert results[0].backend_metadata["batch_cuda_graph_enabled"] is False
+    assert results[0].backend_metadata["cuda_graph_mode"] == "off"
+    assert "batch_model_ms" in results[0].timing
+
+
 def test_fastwam_model_adapter_passes_profile_cache_mode_and_metadata() -> None:
     adapter = FastWAMModelAdapter(
         model=_ModelRequiringNumVideoFrames(),
@@ -695,6 +737,29 @@ class _ModelRequiringNumVideoFrames:
         return self
 
 
+class _BatchModel:
+    kwargs = None
+    call_count = 0
+
+    def infer_action(self, **kwargs):
+        self.call_count += 1
+        self.kwargs = dict(kwargs)
+        batch_size = len(kwargs["prompt"])
+        return {
+            "action": [[[float(index)] * 7] for index in range(batch_size)],
+            "metadata": {
+                "fastwam_batch_size": batch_size,
+                "num_inference_steps": int(kwargs.get("num_inference_steps", 0)),
+            },
+        }
+
+    def to(self, device):
+        return self
+
+    def eval(self):
+        return self
+
+
 class _FastWAMCacheHookMot:
     def prefill_video_cache(self):
         return None
@@ -751,6 +816,29 @@ class _BoundFastWAMProcessor:
             backend_metadata={"raw_keys": sorted(raw_output)},
             future_frames=_future_frames_summary(raw_output),
         )
+
+
+class _BatchFastWAMProcessor(_BoundFastWAMProcessor):
+    def to_model_inputs_batch(self, observations):
+        return {
+            "prompt": [f"prompt: {observation.prompt}" for observation in observations],
+            "input_image": _ShapeOnly((len(observations), 3, 224, 448)),
+            "proprio": _ShapeOnly((len(observations), 8)),
+        }
+
+    def to_harness_results_batch(self, raw_output):
+        return [
+            InferenceResult(
+                action_chunk=ActionChunk(actions=actions),
+                backend_metadata={"raw_keys": sorted(raw_output)},
+            )
+            for actions in raw_output["action"]
+        ]
+
+
+class _ShapeOnly:
+    def __init__(self, shape):
+        self.shape = shape
 
 
 def _fastwam_cfg(*, visualize_future_video: bool = False, seed=None):

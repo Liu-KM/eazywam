@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from eazywam.core.action_contract import ActionContractError
+from eazywam.core.batching import BatchDispatchItem, BatchDispatcher
 from eazywam.core.backend_session import BackendSession
 from eazywam.core.invocation import Invocation
 from eazywam.core.observation_io import (
@@ -19,7 +20,7 @@ from eazywam.core.observation_io import (
 from eazywam.core.preflight import PreflightError
 from eazywam.core.registry import Registry, default_registry
 from eazywam.core.runtime import SERVE_SPEC
-from eazywam.core.types import InferenceRequest, OptimizationProfile
+from eazywam.core.types import InferenceRequest, InferenceResult, OptimizationProfile
 
 
 class ServeApp:
@@ -33,10 +34,17 @@ class ServeApp:
         cache_dir: str | Path | None = None,
         backend_overrides: dict[str, str] | None = None,
         allow_synthetic_observation: bool = False,
+        batch_enabled: bool = False,
+        max_batch_size: int = 1,
+        max_wait_time: float = 0.0,
     ) -> None:
         self.registry = registry or default_registry()
         self.closed = False
         self.allow_synthetic_observation = allow_synthetic_observation
+        self.batch_enabled = bool(batch_enabled)
+        self.max_batch_size = int(max_batch_size)
+        self.max_wait_time = float(max_wait_time)
+        self.batch_dispatcher: BatchDispatcher | None = None
         self.invocation = Invocation.create(
             registry=self.registry,
             model_id=model_id,
@@ -61,6 +69,13 @@ class ServeApp:
         )
         try:
             self.invocation.start_backend()
+            if self.batch_enabled:
+                self.batch_dispatcher = BatchDispatcher(
+                    dispatch_fn=self._dispatch_batch,
+                    trace=self.invocation.trace,
+                    max_batch_size=self.max_batch_size,
+                    max_wait_time=self.max_wait_time,
+                )
             self._trace("serve_ready", status="ok")
         except Exception as exc:
             self.invocation.write_error(
@@ -81,10 +96,16 @@ class ServeApp:
     def health(self) -> dict[str, Any]:
         return {
             "status": "ok",
+            "ready": self.session is not None and not self.closed,
             "run_id": self.run_id,
             "trace_path": str(self.trace_path),
             "runtime_info": self.runtime_info,
             "accepts_synthetic_observation": self.allow_synthetic_observation,
+            "batching": {
+                "enabled": self.batch_enabled,
+                "max_batch_size": self.max_batch_size,
+                "max_wait_time": self.max_wait_time,
+            },
             "endpoints": {
                 "health": "GET /health",
                 "infer": "POST /infer",
@@ -95,6 +116,8 @@ class ServeApp:
         if self.closed:
             return
         self.closed = True
+        if self.batch_dispatcher is not None:
+            self.batch_dispatcher.close()
         try:
             if not self.invocation.closed:
                 self.invocation.write_backend_close()
@@ -142,19 +165,30 @@ class ServeApp:
             )
             if request.reset:
                 self.backend.reset()
-            result = self.session_or_raise.infer_and_trace(
-                request,
-                event="serve_request_end",
-                expected_horizon=request.action_horizon,
-                started_at=start,
-                payload={
-                    "request_id": request_id,
-                    "status": "ok",
-                    "action_horizon": request.action_horizon,
-                    "replan_steps": request.replan_steps,
-                    "synthetic_observation": synthetic_observation,
-                },
-            )
+            payload = {
+                "request_id": request_id,
+                "status": "ok",
+                "action_horizon": request.action_horizon,
+                "replan_steps": request.replan_steps,
+                "synthetic_observation": synthetic_observation,
+            }
+            if self.batch_dispatcher is not None:
+                result = self.batch_dispatcher.infer(
+                    request_id=request_id,
+                    request=request,
+                    event="serve_request_end",
+                    expected_horizon=request.action_horizon,
+                    started_at=start,
+                    payload=payload,
+                )
+            else:
+                result = self.session_or_raise.infer_and_trace(
+                    request,
+                    event="serve_request_end",
+                    expected_horizon=request.action_horizon,
+                    started_at=start,
+                    payload=payload,
+                )
             return result.to_dict()
         except Exception as exc:
             self.invocation.write_error(
@@ -184,6 +218,13 @@ class ServeApp:
         if self.session is None:
             raise RuntimeError("serve backend session is not started")
         return self.session
+
+    def _dispatch_batch(
+        self,
+        items: list[BatchDispatchItem],
+        batch_id: str,
+    ) -> list[InferenceResult]:
+        return self.session_or_raise.infer_batch_and_trace(items, batch_id=batch_id)
 
 
 def make_handler(app: ServeApp) -> type[BaseHTTPRequestHandler]:
@@ -253,6 +294,9 @@ def serve(
     cache_dir: str | Path | None = None,
     backend_overrides: dict[str, str] | None = None,
     allow_synthetic_observation: bool = False,
+    batch_enabled: bool = False,
+    max_batch_size: int = 1,
+    max_wait_time: float = 0.0,
 ) -> ThreadingHTTPServer:
     app = ServeApp(
         model_id=model_id,
@@ -262,6 +306,9 @@ def serve(
         cache_dir=cache_dir,
         backend_overrides=backend_overrides,
         allow_synthetic_observation=allow_synthetic_observation,
+        batch_enabled=batch_enabled,
+        max_batch_size=max_batch_size,
+        max_wait_time=max_wait_time,
     )
     return WamHTTPServer((host, port), app)
 
@@ -275,6 +322,9 @@ def smoke_serve(
     backend_overrides: dict[str, str] | None = None,
     payload: dict[str, Any] | None = None,
     timeout_s: float = 300.0,
+    batch_enabled: bool = False,
+    max_batch_size: int = 1,
+    max_wait_time: float = 0.0,
 ) -> dict[str, Any]:
     server = serve(
         model_id=model_id,
@@ -285,6 +335,9 @@ def smoke_serve(
         cache_dir=cache_dir,
         backend_overrides=backend_overrides,
         allow_synthetic_observation=True,
+        batch_enabled=batch_enabled,
+        max_batch_size=max_batch_size,
+        max_wait_time=max_wait_time,
     )
     host, port = server.server_address
     thread = threading.Thread(target=server.serve_forever, daemon=True)

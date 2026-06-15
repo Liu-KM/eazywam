@@ -375,14 +375,14 @@ class FastWAM(torch.nn.Module):
     def _encode_input_image_latents_tensor(self, input_image: torch.Tensor, tiled=False, tile_size=(30, 52), tile_stride=(15, 26)):
         if input_image.ndim == 3:
             input_image = input_image.unsqueeze(0)
-        if input_image.ndim != 4 or input_image.shape[0] != 1 or input_image.shape[1] != 3:
+        if input_image.ndim != 4 or input_image.shape[0] < 1 or input_image.shape[1] != 3:
             raise ValueError(
-                f"`input_image` must have shape [1,3,H,W] or [3,H,W], got {tuple(input_image.shape)}"
+                f"`input_image` must have shape [B,3,H,W] or [3,H,W], got {tuple(input_image.shape)}"
             )
-        image = input_image.to(device=self.device)[0].unsqueeze(1)
-        z = self.vae.encode([image], device=self.device, tiled=tiled, tile_size=tile_size, tile_stride=tile_stride)
+        images = [image.unsqueeze(1) for image in input_image.to(device=self.device)]
+        z = self.vae.encode(images, device=self.device, tiled=tiled, tile_size=tile_size, tile_stride=tile_stride)
         if isinstance(z, list):
-            z = z[0].unsqueeze(0)
+            z = torch.stack(z)
         return z
 
     def _decode_latents(self, latents, tiled=False, tile_size=(30, 52), tile_stride=(15, 26)):
@@ -1012,7 +1012,7 @@ class FastWAM(torch.nn.Module):
     @torch.no_grad()
     def infer_joint(
         self,
-        prompt: Optional[str],
+        prompt: Optional[Union[str, Sequence[str]]],
         input_image: torch.Tensor,
         num_video_frames: int,
         action_horizon: int,
@@ -1232,11 +1232,11 @@ class FastWAM(torch.nn.Module):
 
         if input_image.ndim == 3:
             input_image = input_image.unsqueeze(0)
-        if input_image.ndim != 4 or input_image.shape[0] != 1 or input_image.shape[1] != 3:
+        if input_image.ndim != 4 or input_image.shape[0] < 1 or input_image.shape[1] != 3:
             raise ValueError(
-                f"`input_image` must have shape [1,3,H,W] or [3,H,W], got {tuple(input_image.shape)}"
+                f"`input_image` must have shape [B,3,H,W] or [3,H,W], got {tuple(input_image.shape)}"
             )
-        _, _, height, width = input_image.shape
+        batch_size, _, height, width = input_image.shape
         if height % 16 != 0 or width % 16 != 0:
             raise ValueError(
                 f"`input_image` must be resized before infer, expected multiples of 16 but got HxW=({height},{width})"
@@ -1244,23 +1244,38 @@ class FastWAM(torch.nn.Module):
         if proprio is not None:
             if self.proprio_dim is None:
                 raise ValueError("`proprio` was provided but `proprio_dim=None` so `proprio_encoder` is disabled.")
-            if proprio.ndim == 1:
+            if proprio.ndim == 1 and batch_size == 1:
                 proprio = proprio.unsqueeze(0)
-            elif proprio.ndim == 2 and proprio.shape[0] == 1:
+            elif proprio.ndim == 2 and proprio.shape[0] == batch_size:
                 pass
             else:
-                raise ValueError(f"`proprio` must be [D] or [1,D], got shape {tuple(proprio.shape)}")
+                raise ValueError(
+                    f"`proprio` must be [D] or [B,D] with B={batch_size}, got shape {tuple(proprio.shape)}"
+                )
             if proprio.shape[1] != self.proprio_dim:
                 raise ValueError(f"`proprio` last dim must be {self.proprio_dim}, got {proprio.shape[1]}")
             proprio = proprio.to(device=self.device, dtype=self.torch_dtype)
 
-        generator = None if seed is None else torch.Generator(device=rand_device).manual_seed(seed)
-        latents_action = torch.randn(
-            (1, action_horizon, self.action_expert.action_dim),
-            generator=generator,
-            device=rand_device,
-            dtype=torch.float32,
-        ).to(device=self.device, dtype=self.torch_dtype)
+        if seed is None:
+            latents_action = torch.randn(
+                (batch_size, action_horizon, self.action_expert.action_dim),
+                device=rand_device,
+                dtype=torch.float32,
+            )
+        else:
+            latents_action = torch.cat(
+                [
+                    torch.randn(
+                        (1, action_horizon, self.action_expert.action_dim),
+                        generator=torch.Generator(device=rand_device).manual_seed(seed),
+                        device=rand_device,
+                        dtype=torch.float32,
+                    )
+                    for _ in range(batch_size)
+                ],
+                dim=0,
+            )
+        latents_action = latents_action.to(device=self.device, dtype=self.torch_dtype)
 
         input_image = input_image.to(device=self.device, dtype=self.torch_dtype)
         first_frame_latents = self._encode_input_image_latents_tensor(input_image=input_image, tiled=tiled)
@@ -1274,6 +1289,10 @@ class FastWAM(torch.nn.Module):
             raise ValueError("Either `prompt` or both `context/context_mask` must be provided.")
 
         if use_prompt:
+            if isinstance(prompt, str) and batch_size != 1:
+                raise ValueError(
+                    f"Batched `input_image` requires a prompt sequence of length {batch_size}, got a string."
+                )
             context, context_mask = self.encode_prompt(prompt)
         else:
             if context is None or context_mask is None:
@@ -1288,6 +1307,11 @@ class FastWAM(torch.nn.Module):
                 )
             context = context.to(device=self.device, dtype=self.torch_dtype, non_blocking=True)
             context_mask = context_mask.to(device=self.device, dtype=torch.bool, non_blocking=True)
+        if context.shape[0] != batch_size or context_mask.shape[0] != batch_size:
+            raise ValueError(
+                "`context/context_mask` batch dimension must match input_image: "
+                f"got {context.shape[0]}/{context_mask.shape[0]} vs {batch_size}"
+            )
         if proprio is not None:
             context, context_mask = self._append_proprio_to_context(
                 context=context,
@@ -1318,6 +1342,7 @@ class FastWAM(torch.nn.Module):
                 torch_compile_stats.mode if torch_compile_stats.enabled else "off"
             ),
             "image_hw": [int(height), int(width)],
+            "batch_size": int(batch_size),
             "action_horizon": int(action_horizon),
             "action_seq_len": int(latents_action.shape[1]),
             "video_seq_len": cache_state.video_seq_len if cache_state is not None else None,
@@ -1336,7 +1361,7 @@ class FastWAM(torch.nn.Module):
         )
         denoise_start = time.perf_counter()
         for step_t_action, step_delta_action in zip(infer_timesteps_action, infer_deltas_action):
-            timestep_action = step_t_action.unsqueeze(0).to(dtype=latents_action.dtype, device=self.device)
+            timestep_action = step_t_action.expand(batch_size).to(dtype=latents_action.dtype, device=self.device)
 
             pred_action = self._predict_action_noise_step(
                 first_frame_latents=first_frame_latents,
@@ -1352,13 +1377,17 @@ class FastWAM(torch.nn.Module):
             )
             latents_action = self.infer_action_scheduler.step(pred_action, step_delta_action, latents_action)
         denoise_wall_ms = (time.perf_counter() - denoise_start) * 1000
+        action_out = latents_action.detach().to(device="cpu", dtype=torch.float32)
+        if batch_size == 1:
+            action_out = action_out[0]
 
         return {
-            "action": latents_action[0].detach().to(device="cpu", dtype=torch.float32),
+            "action": action_out,
             "metadata": {
                 "dit_cache_enabled": cache_mode == "video_kv",
                 "dit_cache_mode": cache_mode,
                 "dit_cache_hook": "fastwam_video_kv_cache",
+                "fastwam_batch_size": int(batch_size),
                 "num_inference_steps": int(num_inference_steps),
                 "video_seq_len": cache_state.video_seq_len if cache_state is not None else None,
                 "action_seq_len": int(latents_action.shape[1]),

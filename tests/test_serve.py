@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -114,6 +115,24 @@ class CapturingBackend:
         return
 
 
+class BatchCapturingBackend(CapturingBackend):
+    def __init__(self, manifest: Manifest, profiles: list[OptimizationProfile]) -> None:
+        super().__init__(manifest, profiles)
+        self.batch_sizes: list[int] = []
+
+    def infer_batch(self, requests: list[InferenceRequest]) -> list[InferenceResult]:
+        self.batch_sizes.append(len(requests))
+        return [
+            InferenceResult(
+                action_chunk=ActionChunk(
+                    actions=[[float(index), float(request.action_horizon)]]
+                ),
+                backend_metadata={"batch_index": index},
+            )
+            for index, request in enumerate(requests)
+        ]
+
+
 def _serve_registry() -> tuple[Registry, list[CapturingBackend]]:
     registry = Registry()
     registry.register_runtime_resolver(native_runtime_resolver)
@@ -184,6 +203,7 @@ def test_serve_infer_without_observation_requires_payload_by_default(tmp_path) -
         app.infer_once({})
 
     assert app.health["accepts_synthetic_observation"] is False
+    assert app.health["ready"] is True
     assert app.health["trace_path"] == str(app.trace_path)
     app.close()
     events = read_events(app.trace_path)
@@ -248,6 +268,49 @@ def test_serve_returns_and_traces_future_and_value_outputs(tmp_path) -> None:
     request_end = [event for event in events if event["event"] == "serve_request_end"][0]
     assert request_end["future_frames"] == result["future_frames"]
     assert request_end["value"] == result["value"]
+
+
+def test_serve_batch_groups_concurrent_requests(tmp_path) -> None:
+    registry = Registry()
+    created: list[BatchCapturingBackend] = []
+
+    def factory(manifest: Manifest, profiles: list[OptimizationProfile]) -> BatchCapturingBackend:
+        backend = BatchCapturingBackend(manifest, profiles)
+        created.append(backend)
+        return backend
+
+    registry.register_backend("fake", factory)
+    registry.register_processor("passthrough", lambda manifest: PassthroughProcessor.from_manifest(manifest))
+    app = ServeApp(
+        "fake-open-loop",
+        registry=registry,
+        trace_dir=tmp_path,
+        batch_enabled=True,
+        max_batch_size=2,
+        max_wait_time=0.25,
+    )
+    payloads = [
+        {"observation": {"images": {"primary": []}, "prompt": f"request {index}"}}
+        for index in range(2)
+    ]
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(app.infer_once, payloads))
+    finally:
+        app.close()
+
+    assert created[0].batch_sizes == [2]
+    assert sorted(result["backend_metadata"]["batch_index"] for result in results) == [0, 1]
+    events = read_events(app.trace_path)
+    dispatch_start = [event for event in events if event["event"] == "batch_dispatch_start"][0]
+    dispatch_end = [event for event in events if event["event"] == "batch_dispatch_end"][0]
+    request_end = [event for event in events if event["event"] == "serve_request_end"]
+    assert dispatch_start["batch_size"] == 2
+    assert dispatch_end["batch_size"] == 2
+    assert len(request_end) == 2
+    assert all(event["batch_size"] == 2 for event in request_end)
+    assert all(event["batch_fallback_reason"] is None for event in request_end)
 
 
 def test_serve_maps_reference_entry_to_native_backend(tmp_path) -> None:
