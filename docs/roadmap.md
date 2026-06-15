@@ -181,6 +181,21 @@ CLI flag and the telemetry layer can report latency, memory, and output drift.
 Expected deployment target: any supported GPU environment with the backend's
 required runtime environment and mounted cache/run directories.
 
+## Phase F2: Acceleration Profile Contract
+
+Goal: make acceleration work composable before adding more tricks.
+
+- Keep `docs/optimization_profiles.md` as the canonical profile-card contract.
+- Classify every acceleration method by family: action runtime, output control,
+  scheduler, dtype, attention backend, native cache, feature cache,
+  graph/compile, batch serving, or experimental.
+- Require each profile to declare parameters, requirements, conflicts, trace
+  fields, output checks, and rollout status before implementation.
+- Keep current FastWAM `dit_cache` semantics stable: it is the request-local
+  video K/V cache, not TeaCache.
+- Keep `torch_compile` experimental and disabled by default until measured
+  warm-run benefits exceed compile/fallback cost.
+
 ## Phase G: Curated Model Library
 
 Goal: become useful to new WAM/VLA users without requiring them to read every
@@ -192,13 +207,18 @@ upstream repository first.
 - Quickstarts for open-loop and simulator paths.
 - MIT license selected before public release.
 
-## Later Optimization Profiles
+## Acceleration Tracks
 
-After the product spine works, add more deployment profiles:
+After the product spine works, optimization work should proceed through these
+tracks:
 
-- torch.compile.
-- CUDA Graph.
-- cache/history reuse.
-- remote inference overhead.
-- action chunk scheduling.
-- quantization and post-training compression.
+| Track | Techniques | Rollout status |
+|---|---|---|
+| Policy runtime | action chunking, receding horizon, execute horizon, temporal ensemble | `action_horizon`/`replan_steps` are implemented; execute horizon and temporal ensemble are next. |
+| Output control | action-only inference, no future video decode/save, text/goal embedding cache | FastWAM action-only is implemented; cross-model output-control profile and text cache are planned. |
+| Scheduler / sampler | DPM-Solver++, UniPC, AYS, Karras, FlowMatch schedules | Planned adapter layer; call backend/Diffusers solvers where possible. |
+| Precision / attention | bf16/fp16/TF32, SDPA, FlashAttention, xFormers, SageAttention | bf16/SDPA are partial; explicit selectors are planned; SageAttention is optional. |
+| Native cache / exact runtime | FastWAM `dit_cache`, CUDA Graph, warmup/preallocation, torch.compile | `dit_cache` and CUDA Graph are implemented for FastWAM; torch.compile remains experimental. |
+| WAM-specific feature cache | TeaCache, PAB, FasterCache, cross-chunk cache, step skipping | TeaCache is the next planned profile; PAB/FasterCache are optional benchmark backends. |
+| Throughput / serving | eval sharding, batched action denoise, dynamic batch serving, xDiT | Planned after the profile contract and FastWAM parity hardening. |
+| Experimental / not default | token merging, AsymRnR, Sparse VideoGen, PTQ, FP8 TensorRT | Track as research directions; do not default without model-specific success-rate evidence. |

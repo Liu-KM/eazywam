@@ -62,6 +62,11 @@ telemetry:
 - Optimization profiles may only contain fields declared by their profile spec.
 - Conflicting profiles should fail before backend load.
 - Training-only methods cannot be enabled as runtime profiles.
+- A manifest-supported profile is not necessarily applied or measured. The
+  backend post-load trace reports whether a requested profile was actually
+  `applied`, while published speedup claims require `measured` evidence.
+- Experimental profiles should stay disabled by default unless the model entry
+  records backend-specific evidence and an explicit rollout reason.
 
 ## Relationship To Model Entries
 
@@ -69,4 +74,4 @@ The config does not describe model capabilities. The model entry records
 curated defaults and known gaps; the backend or remote server reports runtime
 support.
 
-See `docs/wamfile.md`.
+See `docs/wamfile.md` and `docs/optimization_profiles.md`.

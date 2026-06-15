@@ -50,10 +50,12 @@ def test_registry_can_include_manifest_enabled_optimization_profiles() -> None:
     )
     by_name = {profile.name: profile for profile in profiles}
 
+    assert by_name["action_chunk_scheduling"].enabled is True
     assert by_name["dit_cache"].enabled is True
     assert by_name["dit_cache"].params == {"mode": "video_kv"}
     assert by_name["cuda_graph"].enabled is True
     assert by_name["cuda_graph"].params == {"mode": "auto", "capture": "action_body"}
+    assert "torch_compile" not in by_name
 
 
 def test_registry_deduplicates_explicit_and_default_optimization_profiles() -> None:

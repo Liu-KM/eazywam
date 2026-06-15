@@ -57,6 +57,30 @@ The first runnable real integrations should come from P0 or a simple P1 remote
 wrapper. P2/P3 methods can be backend targets, but they should not define the
 initial harness core.
 
+## Profile Taxonomy
+
+`docs/optimization_profiles.md` is the canonical profile-card contract. It
+defines the stable profile families, required fields, trace fields, output
+checks, and rollout status values used by manifests and backend traces.
+
+The current families are:
+
+| Family | Purpose | Early examples |
+|---|---|---|
+| `action_runtime` | Reduce model calls through action chunks and replanning. | `action_chunk_scheduling`, future `action_runtime`. |
+| `output_control` | Avoid unnecessary future video decode/save and artifacts. | action-only inference, `return_future=false`. |
+| `scheduler` | Control diffusion or flow sampling schedules. | DPM-Solver++, UniPC, AYS, Karras, FlowMatch schedules. |
+| `dtype` | Control runtime precision and matmul policy. | bf16, fp16, TF32. |
+| `attention_backend` | Select transformer attention implementation. | SDPA, FlashAttention, xFormers, SageAttention. |
+| `native_cache` | Use model-native request-local caches. | FastWAM `dit_cache` / `video_kv`. |
+| `feature_cache` | Reuse or approximate intermediate DiT features. | `teacache`, PAB, FasterCache. |
+| `graph_compile` | Reduce Python/kernel launch overhead. | `cuda_graph`, `torch_compile`. |
+| `batch_serving` | Improve eval and serving throughput. | eval sharding, dynamic batches, batched action denoise. |
+
+Important naming rule: FastWAM `dit_cache` is the existing request-local video
+K/V cache. TeaCache is a separate future profile named `teacache`; do not merge
+its semantics into `dit_cache`.
+
 ## Optimization Profile Shape
 
 Harness configs should enable optimization through a small structured block:

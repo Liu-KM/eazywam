@@ -170,6 +170,62 @@ metadata:
 - `batch_shape_key`
 - `batch_cuda_graph_enabled`
 
+Future profile implementations should keep their metadata grouped by profile
+family so `wam compare` can reason about profile changes without backend-specific
+parsing. Standard field groups are:
+
+`action_runtime`:
+
+- `action_horizon`
+- `execute_horizon`
+- `replan_steps`
+- `chunk_size`
+- `temporal_ensemble_enabled`
+- `temporal_ensemble_window`
+- `tail_actions_dropped`
+- `from_stale_chunk`
+
+`output_control`:
+
+- `action_only`
+- `return_future`
+- `video_decode_enabled`
+- `video_save_enabled`
+- `future_latent_kept`
+
+`scheduler`:
+
+- `scheduler_name`
+- `solver`
+- `num_inference_steps`
+- `timesteps`
+- `sigmas`
+- `schedule_type`
+
+`dtype`:
+
+- `runtime_dtype`
+- `weight_dtype`
+- `activation_dtype`
+- `tf32_enabled`
+
+`attention_backend`:
+
+- `attention_backend`
+- `attention_backend_actual`
+- `attention_backend_fallback_reason`
+
+`teacache`:
+
+- `teacache_enabled`
+- `teacache_mode`
+- `teacache_layers`
+- `teacache_threshold`
+- `teacache_hit_rate`
+- `teacache_skipped_steps`
+- `teacache_drift_score`
+- `teacache_fallback_reason`
+
 For `serve` mode, startup emits backend load/warmup/reset events before
 `serve_ready`. Each `/infer` request emits `serve_request_start` and
 `serve_request_end` with request timing, output shape, and action summary. Bad
