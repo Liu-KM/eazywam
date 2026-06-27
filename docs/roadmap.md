@@ -216,9 +216,9 @@ tracks:
 |---|---|---|
 | Policy runtime | action chunking, receding horizon, execute horizon, temporal ensemble | `action_horizon`/`replan_steps` are implemented; execute horizon and temporal ensemble are next. |
 | Output control | action-only inference, no future video decode/save, text/goal embedding cache | FastWAM action-only is implemented; cross-model output-control profile and text cache are planned. |
-| Scheduler / sampler | DPM-Solver++, UniPC, AYS, Karras, FlowMatch schedules | Planned adapter layer; call backend/Diffusers solvers where possible. |
+| Scheduler / sampler | DPM-Solver++, UniPC, AYS, Karras, FlowMatch schedules | FastWAM has an opt-in FlowMatch Euler scheduler profile with single-task SuperPod evidence; cross-backend adapters and alternate solvers remain planned. |
 | Precision / attention | bf16/fp16/TF32, SDPA, FlashAttention, xFormers, SageAttention | bf16/SDPA are partial; explicit selectors are planned; SageAttention is optional. |
 | Native cache / exact runtime | FastWAM `dit_cache`, CUDA Graph, warmup/preallocation, torch.compile | `dit_cache` and CUDA Graph are implemented for FastWAM; torch.compile remains experimental. |
-| WAM-specific feature cache | TeaCache, PAB, FasterCache, cross-chunk cache, step skipping | FastWAM TeaCache L1 is implemented as an opt-in action-denoise step-output cache pending SuperPod LIBERO/RoboTwin measurements; PAB/FasterCache remain optional benchmark backends. |
-| Throughput / serving | eval sharding, batched action denoise, dynamic batch serving, xDiT | Planned after the profile contract and FastWAM parity hardening. |
+| WAM-specific feature cache | TeaCache, PAB, FasterCache, cross-chunk cache, step skipping | FastWAM TeaCache L1 is implemented as an opt-in approximate action-denoise step-output cache; stronger success-rate gates are still required before defaulting it. PAB/FasterCache remain optional benchmark backends. |
+| Throughput / serving | eval sharding, batched action denoise, dynamic batch serving, xDiT | `wam serve --batch`, remote eval batching, and FastWAM `infer_batch` have smoke evidence; full throughput acceptance and xDiT remain planned. |
 | Experimental / not default | token merging, AsymRnR, Sparse VideoGen, PTQ, FP8 TensorRT | Track as research directions; do not default without model-specific success-rate evidence. |

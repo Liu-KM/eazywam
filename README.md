@@ -152,11 +152,11 @@ profile contract.
 | --- | --- | --- |
 | Policy runtime | action chunking, receding horizon, execute horizon, temporal ensemble | `action_horizon` and `replan_steps` are implemented in the runner; `execute_horizon` and `temporal_ensemble` are planned. |
 | Output control | action-only inference, no future video decode/save, text/goal embedding cache | FastWAM uses action-only native inference and defaults `return_future=false`; text/goal embedding cache is planned. |
-| Scheduler / sampler | `num_inference_steps`, custom timesteps/sigmas, DPM-Solver++, UniPC, AYS, Karras, FlowMatch schedules | FastWAM exposes step count and sigma shift through backend options; a cross-backend scheduler adapter is planned. |
+| Scheduler / sampler | `num_inference_steps`, custom timesteps/sigmas, DPM-Solver++, UniPC, AYS, Karras, FlowMatch schedules | FastWAM has an opt-in FlowMatch Euler scheduler profile with SuperPod single-task candidate evidence; cross-backend adapters and alternate solvers remain planned. |
 | Precision and attention | bf16/fp16/fp32, TF32, SDPA, FlashAttention, xFormers, SageAttention | bf16 defaults and PyTorch SDPA are partially supported; explicit backend selectors are planned. SageAttention stays optional. |
 | Native cache and exact runtime | FastWAM `dit_cache` (`video_kv`), CUDA Graph, torch.compile, warmup/preallocation | `dit_cache` and `cuda_graph(auto)` are implemented for FastWAM; CUDA Graph has SuperPod H800 speedup evidence. `torch_compile` is experimental and disabled by default. |
-| WAM-specific approximate cache | TeaCache, PAB, FasterCache, cross-chunk cache, step skipping | TeaCache is the next planned approximate DiT cache profile. PAB and FasterCache are optional benchmark backends, not defaults. |
-| Throughput and serving | eval sharding, batched action denoise, dynamic batch serving, xDiT/multi-GPU | `wam serve` has a basic policy endpoint; batch eval/serving and xDiT-style multi-GPU are planned. |
+| WAM-specific approximate cache | TeaCache, PAB, FasterCache, cross-chunk cache, step skipping | FastWAM TeaCache L1 is implemented as an opt-in approximate action-denoise step-output cache; PAB and FasterCache remain optional benchmark backends, not defaults. |
+| Throughput and serving | eval sharding, batched action denoise, dynamic batch serving, xDiT/multi-GPU | `wam serve --batch`, remote eval batching, and FastWAM `infer_batch` have smoke evidence; full throughput acceptance and xDiT-style multi-GPU remain planned. |
 | Experimental / not default | token merging, AsymRnR, Sparse VideoGen, PTQ methods, FP8 TensorRT | Tracked as research directions only; they need model-specific success-rate evidence before becoming runtime profiles. |
 
 ## Commands

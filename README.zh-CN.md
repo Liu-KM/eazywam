@@ -148,11 +148,11 @@ EazyWAM 把推理加速做成显式 optimization profile。一个 profile 在进
 | --- | --- | --- |
 | Policy runtime | action chunking、receding horizon、execute horizon、temporal ensemble | runner 已实现 `action_horizon` 和 `replan_steps`；`execute_horizon` 和 `temporal_ensemble` 仍在规划中。 |
 | Output control | action-only inference、no future video decode/save、text/goal embedding cache | FastWAM 已使用 action-only native inference，并默认 `return_future=false`；text/goal embedding cache 仍在规划中。 |
-| Scheduler / sampler | `num_inference_steps`、自定义 timesteps/sigmas、DPM-Solver++、UniPC、AYS、Karras、FlowMatch schedules | FastWAM 已通过 backend options 暴露 step count 和 sigma shift；跨 backend scheduler adapter 仍在规划中。 |
+| Scheduler / sampler | `num_inference_steps`、自定义 timesteps/sigmas、DPM-Solver++、UniPC、AYS、Karras、FlowMatch schedules | FastWAM 已实现 opt-in FlowMatch Euler scheduler profile，并有 SuperPod 单任务候选配置证据；跨 backend adapter 和其它 solver 仍在规划中。 |
 | Precision and attention | bf16/fp16/fp32、TF32、SDPA、FlashAttention、xFormers、SageAttention | bf16 默认值和 PyTorch SDPA 已部分支持；显式 backend selector 仍在规划中。SageAttention 保持 optional。 |
 | Native cache and exact runtime | FastWAM `dit_cache` (`video_kv`)、CUDA Graph、torch.compile、warmup/preallocation | FastWAM 已实现 `dit_cache` 和 `cuda_graph(auto)`；CUDA Graph 已有 SuperPod H800 加速证据。`torch_compile` 仍是 experimental，默认关闭。 |
-| WAM-specific approximate cache | TeaCache、PAB、FasterCache、cross-chunk cache、step skipping | TeaCache 是下一步 planned approximate DiT cache profile。PAB 和 FasterCache 先作为 optional benchmark backend，不默认启用。 |
-| Throughput and serving | eval sharding、batched action denoise、dynamic batch serving、xDiT/multi-GPU | `wam serve` 已有基础 policy endpoint；batch eval/serving 和 xDiT-style multi-GPU 仍在规划中。 |
+| WAM-specific approximate cache | TeaCache、PAB、FasterCache、cross-chunk cache、step skipping | FastWAM TeaCache L1 已实现为 opt-in 近似 action-denoise step-output cache；PAB 和 FasterCache 仍是 optional benchmark backend，不默认启用。 |
+| Throughput and serving | eval sharding、batched action denoise、dynamic batch serving、xDiT/multi-GPU | `wam serve --batch`、remote eval batching 和 FastWAM `infer_batch` 已有 smoke evidence；完整吞吐验收和 xDiT-style multi-GPU 仍在规划中。 |
 | Experimental / not default | token merging、AsymRnR、Sparse VideoGen、PTQ methods、FP8 TensorRT | 只作为研究方向跟踪；进入 runtime profile 前需要模型级 success-rate 证据。 |
 
 ## 常用命令

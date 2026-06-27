@@ -70,6 +70,9 @@ Write code in a simple, direct, and clear style.
   external dependency, or recoverable failure mode.
 - Keep error handling minimal and purposeful. Prefer clear failures over layers
   of broad catches, fallbacks, or speculative validation.
+- Do not fight repeated errors blindly. If the same error appears twice, stop
+  and research the web for 3-5 plausible fixes, then choose and implement the
+  most efficient solution.
 - Do not add abstractions, guards, retries, compatibility paths, or warnings
   just in case. Add them only when the current contract or tests require them.
 - Prefer readable control flow and explicit data shapes over cleverness or
