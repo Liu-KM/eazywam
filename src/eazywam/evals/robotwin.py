@@ -12,10 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from eazywam.core._utils import default_cache_dir
-from eazywam.core.batch_client import RemoteInferenceClient
-from eazywam.core.eval_sharding import episode_indices
 from eazywam.core.eval_runner import EvalCommand, EvalRunnerError, EvalSummary
-from eazywam.core.inference_trace import inference_result_payload, observation_summary
+from eazywam.core.inference_trace import observation_summary
 from eazywam.core.invocation import Invocation
 from eazywam.core.registry import Registry
 from eazywam.core.runtime import RuntimeSpec
@@ -41,9 +39,6 @@ class _EvalContext:
     output_dir: Path
     cache_dir: Path
     robotwin_root: Path
-    batch_endpoint: str | None
-    shard_id: int
-    num_shards: int
     values: dict[str, Any]
 
 
@@ -136,10 +131,6 @@ class RobotWinSingleTaskEvalRunner:
                 instruction_type=context.instruction_type,
                 num_episodes=context.num_episodes,
                 seed=context.seed,
-                batch_endpoint=context.batch_endpoint,
-                shard_id=context.shard_id,
-                num_shards=context.num_shards,
-                selected_episode_indices=_selected_episode_indices(context),
                 action_horizon=context.action_horizon,
                 replan_steps=context.replan_steps,
                 robotwin_root=str(context.robotwin_root),
@@ -170,16 +161,8 @@ class RobotWinSingleTaskEvalRunner:
             stage = "backend_start"
             try:
                 _prepare_robotwin_environment(context)
-                if context.batch_endpoint is None:
-                    invocation.start_backend(require_ready=True, stage_callback=lambda value: None)
-                    runtime_info = invocation.runtime_info
-                else:
-                    invocation.trace.write(
-                        "remote_batch_endpoint",
-                        endpoint=context.batch_endpoint,
-                        shard_id=context.shard_id,
-                        num_shards=context.num_shards,
-                    )
+                invocation.start_backend(require_ready=True, stage_callback=lambda value: None)
+                runtime_info = invocation.runtime_info
 
                 stage = "robotwin_import"
                 eval_policy = _import_robotwin_eval_policy(context.robotwin_root)
@@ -206,18 +189,14 @@ class RobotWinSingleTaskEvalRunner:
                 metrics["task_name"] = context.task_name
                 metrics["task_config"] = context.task_config
                 metrics["instruction_type"] = context.instruction_type
-                shard_episode_count = _shard_episode_count(context)
                 metrics["requested_episodes"] = context.num_episodes
-                metrics["valid_episodes"] = shard_episode_count
+                metrics["valid_episodes"] = context.num_episodes
                 metrics["invalid_setup_count"] = 0
                 metrics["invalid_setups"] = []
-                metrics["total_episodes"] = shard_episode_count
-                metrics["selected_episode_indices"] = _selected_episode_indices(context)
-                metrics["shard_id"] = context.shard_id
-                metrics["num_shards"] = context.num_shards
+                metrics["total_episodes"] = context.num_episodes
                 metrics["success_rate"] = (
-                    float(metrics["successes"]) / float(shard_episode_count)
-                    if shard_episode_count
+                    float(metrics["successes"]) / float(context.num_episodes)
+                    if context.num_episodes
                     else 0.0
                 )
 
@@ -227,13 +206,10 @@ class RobotWinSingleTaskEvalRunner:
                     task_name=context.task_name,
                     task_config=context.task_config,
                     successes=metrics["successes"],
-                    total_episodes=shard_episode_count,
+                    total_episodes=context.num_episodes,
                     requested_episodes=context.num_episodes,
-                    valid_episodes=shard_episode_count,
+                    valid_episodes=context.num_episodes,
                     invalid_setup_count=0,
-                    selected_episode_indices=metrics["selected_episode_indices"],
-                    shard_id=context.shard_id,
-                    num_shards=context.num_shards,
                     success_rate=metrics["success_rate"],
                     results_path=metrics.get("results_path"),
                 )
@@ -284,26 +260,15 @@ class _EazyWAMRobotWinPolicy:
         self.context = context
         self.pending_actions: deque[list[float]] = deque()
         self.episode_id = -1
-        self.local_episode_index = -1
         self.step_id = 0
         self.model_calls = 0
-        self.remote_client = (
-            RemoteInferenceClient(context.batch_endpoint)
-            if context.batch_endpoint is not None
-            else None
-        )
 
     def should_request_observation(self) -> bool:
         return not self.pending_actions
 
     def reset(self) -> None:
         self.pending_actions.clear()
-        self.local_episode_index += 1
-        selected = _selected_episode_indices(self.context)
-        if self.local_episode_index < len(selected):
-            self.episode_id = selected[self.local_episode_index]
-        else:
-            self.episode_id = self.local_episode_index
+        self.episode_id += 1
         self.step_id = 0
         self.model_calls = 0
         self.invocation.trace.write(
@@ -343,7 +308,7 @@ class _EazyWAMRobotWinPolicy:
                 action_horizon=self.context.action_horizon,
                 replan_steps=self.context.replan_steps,
                 optimization_profiles=self.invocation.profiles,
-                reset=self.model_calls == 0 and self.remote_client is None,
+                reset=self.model_calls == 0,
                 runtime_options=_runtime_options(self.context),
             )
             self.invocation.trace.write(
@@ -352,36 +317,18 @@ class _EazyWAMRobotWinPolicy:
                 step_id=self.step_id,
                 replan_id=replan_id,
             )
-            inference_payload = {
-                "episode_id": self.episode_id,
-                "step_id": self.step_id,
-                "replan_id": replan_id,
-                "action_horizon": self.context.action_horizon,
-                "replan_steps": self.context.replan_steps,
-                "shard_id": self.context.shard_id,
-                "num_shards": self.context.num_shards,
-            }
-            if self.remote_client is not None:
-                remote_start = time.perf_counter()
-                result = self.remote_client.infer(request)
-                self.invocation.trace.write(
-                    "inference_end",
-                    **inference_payload,
-                    remote_batch_endpoint=self.context.batch_endpoint,
-                    **inference_result_payload(
-                        self.invocation.manifest,
-                        result,
-                        expected_horizon=self.context.action_horizon,
-                        wall_ms=(time.perf_counter() - remote_start) * 1000,
-                    ),
-                )
-            else:
-                result = self.invocation.session.infer_and_trace(
-                    request,
-                    event="inference_end",
-                    expected_horizon=self.context.action_horizon,
-                    payload=inference_payload,
-                )
+            result = self.invocation.session.infer_and_trace(
+                request,
+                event="inference_end",
+                expected_horizon=self.context.action_horizon,
+                payload={
+                    "episode_id": self.episode_id,
+                    "step_id": self.step_id,
+                    "replan_id": replan_id,
+                    "action_horizon": self.context.action_horizon,
+                    "replan_steps": self.context.replan_steps,
+                },
+            )
             for row in result.action_chunk.actions[: self.context.replan_steps]:
                 self.pending_actions.append([float(value) for value in row])
             if not self.pending_actions:
@@ -458,8 +405,6 @@ def _build_context(
         )
     )
     robotwin_root = Path(str(values["robotwin_root"])).expanduser().resolve()
-    num_shards = _num_shards(values)
-    shard_id = _shard_id(values, num_shards=num_shards)
     return _EvalContext(
         task_name=task_name,
         task_config=task_config,
@@ -471,9 +416,6 @@ def _build_context(
         output_dir=output_dir,
         cache_dir=Path(str(values["cache_dir"])),
         robotwin_root=robotwin_root,
-        batch_endpoint=_optional_endpoint(values.get("batch_endpoint")),
-        shard_id=shard_id,
-        num_shards=num_shards,
         values=values,
     )
 
@@ -604,8 +546,8 @@ def _run_robotwin_eval_policy(
 
         def limited_eval_policy(*args: Any, **kwargs: Any) -> Any:
             if len(args) >= 6:
-                args = (*args[:5], _shard_episode_count(context), *args[6:])
-            kwargs["test_num"] = _shard_episode_count(context)
+                args = (*args[:5], context.num_episodes, *args[6:])
+            kwargs["test_num"] = context.num_episodes
             return original_eval_policy(*args, **kwargs)
 
         setattr(eval_policy, "eval_policy", limited_eval_policy)
@@ -628,7 +570,7 @@ def _robotwin_user_args(context: _EvalContext, policy_name: str) -> dict[str, An
         "ckpt_setting": str(values.get("checkpoint_path", values.get("ckpt", "eazywam-native"))),
         "seed": int(context.seed or 0),
         "instruction_type": context.instruction_type,
-        "eval_num_episodes": _shard_episode_count(context),
+        "eval_num_episodes": context.num_episodes,
         "eval_output_dir": str(eval_output_dir),
         "skip_get_obs_within_replan": _bool_value(
             values.get("skip_get_obs_within_replan", True)
@@ -691,18 +633,6 @@ def _runtime_options(context: _EvalContext) -> dict[str, object]:
         if value is not None:
             options[key] = value
     return options
-
-
-def _selected_episode_indices(context: _EvalContext) -> list[int]:
-    return episode_indices(
-        context.num_episodes,
-        shard_id=context.shard_id,
-        num_shards=context.num_shards,
-    )
-
-
-def _shard_episode_count(context: _EvalContext) -> int:
-    return len(_selected_episode_indices(context))
 
 
 def _collect_metrics(
@@ -855,28 +785,6 @@ def _optional_int(value: object) -> int | None:
     if text == "" or text.lower() in {"none", "null"}:
         return None
     return int(text)
-
-
-def _optional_endpoint(value: object) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text or text.lower() in {"none", "null"}:
-        return None
-    return text
-
-
-def _num_shards(values: dict[str, Any]) -> int:
-    return _positive_int(values.get("num_shards", 1), "num_shards")
-
-
-def _shard_id(values: dict[str, Any], *, num_shards: int) -> int:
-    shard_id = _positive_int(values.get("shard_id", 0), "shard_id", allow_zero=True)
-    if shard_id >= num_shards:
-        raise EvalRunnerError(
-            f"shard_id must be smaller than num_shards; got {shard_id} >= {num_shards}"
-        )
-    return shard_id
 
 
 def _bool_value(value: object) -> bool:

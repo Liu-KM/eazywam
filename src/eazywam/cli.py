@@ -8,7 +8,6 @@ from typing import Sequence
 from eazywam.core.action_contract import ActionContractError
 from eazywam.core.compare import compare_traces
 from eazywam.core.eval_runner import EvalRunner, EvalRunnerError
-from eazywam.core.eval_sharding import merge_shard_summaries
 from eazywam.core.model_entry import (
     doctor_model_entry,
     prepare_model_entry,
@@ -154,21 +153,6 @@ Use `wam <command> --help` for command-specific options.
         help="Shortcut for --set num_episodes=VALUE when the selected workload supports it",
     )
     eval_parser.add_argument(
-        "--batch-endpoint",
-        default=None,
-        help="Resident wam serve endpoint for remote batched model inference",
-    )
-    eval_parser.add_argument(
-        "--shard-id",
-        default=None,
-        help="Shard id for episode-sharded native eval",
-    )
-    eval_parser.add_argument(
-        "--num-shards",
-        default=None,
-        help="Total shard count for episode-sharded native eval",
-    )
-    eval_parser.add_argument(
         "--set",
         action="append",
         default=[],
@@ -210,23 +194,6 @@ Use `wam <command> --help` for command-specific options.
     serve_parser.add_argument("--cache-dir", default=None)
     serve_parser.add_argument("--upstream-dir", default=None)
     serve_parser.add_argument(
-        "--batch",
-        action="store_true",
-        help="Enable dynamic request batching for concurrent /infer requests",
-    )
-    serve_parser.add_argument(
-        "--max-batch-size",
-        type=int,
-        default=1,
-        help="Maximum number of requests per dynamic inference batch",
-    )
-    serve_parser.add_argument(
-        "--max-wait-time",
-        type=float,
-        default=0.0,
-        help="Maximum seconds to wait for more requests before dispatching a batch",
-    )
-    serve_parser.add_argument(
         "--backend-set",
         action="append",
         default=[],
@@ -261,13 +228,6 @@ Use `wam <command> --help` for command-specific options.
         default=1e-3,
         help="Maximum allowed drift across action summary scalar fields",
     )
-
-    merge_parser = subparsers.add_parser(
-        "merge-eval-shards",
-        help="Merge JSON summaries from episode-sharded eval workers",
-    )
-    merge_parser.add_argument("summaries", nargs="+")
-    merge_parser.add_argument("--output", default=None)
 
     return parser
 
@@ -368,9 +328,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         _set_override_if_present(overrides, "num_trials", args.num_trials)
         _set_override_if_present(overrides, "task_name", args.task_name)
         _set_override_if_present(overrides, "num_episodes", args.num_episodes)
-        _set_override_if_present(overrides, "batch_endpoint", args.batch_endpoint)
-        _set_override_if_present(overrides, "shard_id", args.shard_id)
-        _set_override_if_present(overrides, "num_shards", args.num_shards)
         try:
             summary = EvalRunner().run(
                 model_id=args.model_id,
@@ -444,9 +401,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                     backend_overrides=backend_overrides,
                     payload=smoke_payload,
                     timeout_s=args.smoke_timeout,
-                    batch_enabled=args.batch,
-                    max_batch_size=args.max_batch_size,
-                    max_wait_time=args.max_wait_time,
                 )
             except _CLI_KNOWN_ERRORS as exc:
                 _print_cli_error(exc)
@@ -464,9 +418,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 upstream_dir=args.upstream_dir,
                 cache_dir=args.cache_dir,
                 backend_overrides=backend_overrides,
-                batch_enabled=args.batch,
-                max_batch_size=args.max_batch_size,
-                max_wait_time=args.max_wait_time,
             )
         except _CLI_KNOWN_ERRORS as exc:
             _print_cli_error(exc)
@@ -490,13 +441,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_action_drift=args.max_action_drift,
         )
         print(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
-        return 0
-
-    if args.command == "merge-eval-shards":
-        payload = merge_shard_summaries(args.summaries)
-        if args.output is not None:
-            write_json_payload(args.output, payload)
-        print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
     parser.error(f"unknown command: {args.command}")

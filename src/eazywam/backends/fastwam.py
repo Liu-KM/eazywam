@@ -3,9 +3,8 @@ from __future__ import annotations
 import importlib
 import inspect
 import os
-import time
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 from typing import Any, ClassVar
@@ -24,7 +23,6 @@ from eazywam.core._utils import (
 )
 from eazywam.core.types import (
     InferenceRequest,
-    InferenceResult,
     Manifest,
     OptimizationProfile,
 )
@@ -220,6 +218,7 @@ class FastWAMModelAdapter(NativeModelAdapter):
             teacache_fallback_reason,
         ) = self._infer_action_kwargs(request, model_inputs)
         visualize_future_video = self._visualize_future_video()
+
         with self.no_grad_factory():
             if visualize_future_video:
                 if not hasattr(self.model, "infer_joint"):
@@ -252,63 +251,6 @@ class FastWAMModelAdapter(NativeModelAdapter):
                     teacache_fallback_reason=teacache_fallback_reason,
                 ),
             )
-
-    def infer_batch(
-        self,
-        requests: list[InferenceRequest],
-        model_inputs: object,
-    ) -> NativeModelCall:
-        self.require_ready()
-        if not requests:
-            raise self.error_cls("FastWAM batch inference requires at least one request")
-        if self._visualize_future_video():
-            raise self.error_cls(
-                "FastWAM batch inference only supports action-only infer_action; "
-                "future-video infer_joint must use single-request inference."
-            )
-        if not isinstance(model_inputs, dict):
-            raise self.error_cls("FastWAM batch processor must return a mapping of model inputs")
-
-        reason = self._batch_incompatible_reason(requests)
-        if reason is not None:
-            raise self.error_cls(reason)
-
-        reference_request = requests[0]
-        requested_teacache_mode = self._teacache_mode(reference_request)
-        (
-            infer_kwargs,
-            _cuda_graph_mode,
-            torch_compile_mode,
-            teacache_mode,
-            teacache_settings,
-            teacache_fallback_reason,
-        ) = self._infer_action_kwargs(
-            reference_request,
-            model_inputs,
-            force_cuda_graph_mode="off",
-            force_teacache_mode="off",
-        )
-        if requested_teacache_mode != "off":
-            teacache_fallback_reason = "batch_unsupported"
-        with self.no_grad_factory():
-            raw_output = self.model.infer_action(**infer_kwargs)
-        metadata = self._infer_action_metadata(
-            raw_output,
-            infer_kwargs=infer_kwargs,
-            cuda_graph_mode="off",
-            torch_compile_mode=torch_compile_mode,
-            teacache_mode=teacache_mode,
-            teacache_settings=teacache_settings,
-            teacache_fallback_reason=teacache_fallback_reason,
-        )
-        metadata.update(
-            {
-                "fastwam_batch_size": len(requests),
-                "batch_shape_key": self._batch_shape_key(model_inputs, reference_request),
-                "batch_cuda_graph_enabled": False,
-            }
-        )
-        return NativeModelCall(raw_output=raw_output, metadata=metadata)
 
     def close(self) -> None:
         self.model = None
@@ -454,50 +396,6 @@ class FastWAMModelAdapter(NativeModelAdapter):
         if isinstance(raw_output, dict) and isinstance(raw_output.get("metadata"), dict):
             metadata.update(raw_output["metadata"])
         return metadata
-
-    def _batch_incompatible_reason(self, requests: list[InferenceRequest]) -> str | None:
-        first = requests[0]
-        first_signature = (
-            int(first.action_horizon),
-            self._num_inference_steps(first),
-            self._scheduler_timesteps(first),
-            self._scheduler_sigmas(first),
-            self._dit_cache_mode(first),
-            self._torch_compile_mode(first),
-            self._teacache_mode(first),
-        )
-        for request in requests[1:]:
-            signature = (
-                int(request.action_horizon),
-                self._num_inference_steps(request),
-                self._scheduler_timesteps(request),
-                self._scheduler_sigmas(request),
-                self._dit_cache_mode(request),
-                self._torch_compile_mode(request),
-                self._teacache_mode(request),
-            )
-            if signature != first_signature:
-                return "FastWAM batch inference requires homogeneous action/runtime options"
-        return None
-
-    def _batch_shape_key(
-        self,
-        model_inputs: dict[str, Any],
-        request: InferenceRequest,
-    ) -> dict[str, object]:
-        input_image = model_inputs.get("input_image")
-        proprio = model_inputs.get("proprio")
-        return {
-            "input_image": _shape_list(input_image),
-            "proprio": _shape_list(proprio),
-            "action_horizon": int(request.action_horizon),
-            "num_inference_steps": self._num_inference_steps(request),
-            "timesteps": self._scheduler_timesteps(request),
-            "sigmas": self._scheduler_sigmas(request),
-            "cache_mode": self._dit_cache_mode(request),
-            "torch_compile_mode": self._torch_compile_mode(request),
-            "teacache_mode": self._teacache_mode(request),
-        }
 
     def _num_inference_steps(self, request: InferenceRequest) -> int:
         if "num_inference_steps" in request.runtime_options:
@@ -739,77 +637,6 @@ class FastWAMBackend(NativeBackendBase):
         self.require_loaded()
         self._fastwam_adapter().reset()
 
-    def infer_batch(self, requests: list[InferenceRequest]) -> list[InferenceResult]:
-        self.require_warmed()
-        self.require_inference_ready()
-        if not requests:
-            return []
-        adapter = self._fastwam_adapter()
-        if adapter._visualize_future_video():
-            return self._infer_batch_fallback(
-                requests,
-                reason="fastwam_future_video_batch_unsupported",
-            )
-
-        processor = self.native_processor()
-        reason = adapter._batch_incompatible_reason(requests)
-        if reason is not None:
-            return self._infer_batch_fallback(
-                requests,
-                reason="fastwam_heterogeneous_batch",
-            )
-
-        to_model_inputs_batch = getattr(processor, "to_model_inputs_batch", None)
-        to_harness_results_batch = getattr(processor, "to_harness_results_batch", None)
-        if not callable(to_model_inputs_batch) or not callable(to_harness_results_batch):
-            return self._infer_batch_fallback(
-                requests,
-                reason="fastwam_processor_batch_unavailable",
-            )
-
-        preprocess_start = time.perf_counter()
-        model_inputs = to_model_inputs_batch([request.observation for request in requests])
-        preprocess_ms = (time.perf_counter() - preprocess_start) * 1000
-
-        model_start = time.perf_counter()
-        call = adapter.infer_batch(requests, model_inputs)
-        model_ms = (time.perf_counter() - model_start) * 1000
-
-        postprocess_start = time.perf_counter()
-        results = list(to_harness_results_batch(call.raw_output))
-        postprocess_ms = (time.perf_counter() - postprocess_start) * 1000
-        if len(results) != len(requests):
-            raise self.error_cls(
-                f"FastWAM batch postprocess returned {len(results)} results "
-                f"for {len(requests)} requests"
-            )
-
-        timing = {
-            "preprocess_ms": preprocess_ms / len(requests),
-            call.timing_key: model_ms / len(requests),
-            "postprocess_ms": postprocess_ms / len(requests),
-            "total_ms": (preprocess_ms + model_ms + postprocess_ms) / len(requests),
-            "batch_preprocess_ms": preprocess_ms,
-            "batch_model_ms": model_ms,
-            "batch_postprocess_ms": postprocess_ms,
-            "batch_total_ms": preprocess_ms + model_ms + postprocess_ms,
-        }
-        metadata = {
-            **self.native_inference_metadata(),
-            "native_backend": True,
-            **call.metadata,
-        }
-        warnings = [*self.native_inference_warnings(), *call.warnings]
-        return [
-            replace(
-                result,
-                timing=timing,
-                backend_metadata={**result.backend_metadata, **metadata},
-                warnings=[*result.warnings, *warnings],
-            )
-            for result in results
-        ]
-
     def close(self) -> None:
         self.model = None
         self.cfg = None
@@ -847,26 +674,6 @@ class FastWAMBackend(NativeBackendBase):
         if isinstance(adapter, FastWAMModelAdapter):
             return adapter
         raise self.error_cls("FastWAM model is not loaded")
-
-    def _infer_batch_fallback(
-        self,
-        requests: list[InferenceRequest],
-        *,
-        reason: str,
-    ) -> list[InferenceResult]:
-        results = []
-        for request in requests:
-            result = self.infer(request)
-            results.append(
-                replace(
-                    result,
-                    backend_metadata={
-                        **result.backend_metadata,
-                        "batch_fallback_reason": reason,
-                    },
-                )
-            )
-        return results
 
     def _apply_loaded_optimization_profile(
         self,
@@ -1227,16 +1034,6 @@ def _get_config_value(config: object, key: str, default: Any) -> Any:
     if callable(getter):
         return getter(key, default)
     return getattr(config, key, default)
-
-
-def _shape_list(value: object) -> list[int] | None:
-    shape = getattr(value, "shape", None)
-    if shape is None:
-        return None
-    try:
-        return [int(dim) for dim in shape]
-    except TypeError:
-        return None
 
 
 def _optional_scheduler_float(value: object) -> float | None:

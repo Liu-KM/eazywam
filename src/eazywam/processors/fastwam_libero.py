@@ -92,17 +92,6 @@ class FastWAMLiberoProcessor:
             "proprio": proprio,
         }
 
-    def to_model_inputs_batch(self, observations: list[Observation]) -> dict[str, Any]:
-        if not observations:
-            raise FastWAMProcessorError("FastWAM batch inference requires at least one observation.")
-        torch = importlib.import_module("torch")
-        inputs = [self.to_model_inputs(observation) for observation in observations]
-        return {
-            "prompt": [str(item["prompt"]) for item in inputs],
-            "input_image": torch.cat([item["input_image"] for item in inputs], dim=0),
-            "proprio": torch.cat([item["proprio"] for item in inputs], dim=0),
-        }
-
     def to_harness_result(self, raw_output: object) -> InferenceResult:
         self._require_runtime()
         action = self._extract_raw_action(raw_output)
@@ -124,23 +113,6 @@ class FastWAMLiberoProcessor:
                 "action_denormalized": True,
             },
         )
-
-    def to_harness_results_batch(self, raw_output: object) -> list[InferenceResult]:
-        if not isinstance(raw_output, dict) or "action" not in raw_output:
-            raise FastWAMProcessorError("FastWAM batch raw output must contain key `action`.")
-        action = raw_output["action"]
-        if action.ndim == 2:
-            action = action.unsqueeze(0)
-        if action.ndim != 3:
-            raise FastWAMProcessorError(
-                f"Expected batch action tensor [B,T,D], got {tuple(action.shape)}."
-            )
-        results = []
-        for index in range(int(action.shape[0])):
-            item_raw = dict(raw_output)
-            item_raw["action"] = action[index : index + 1]
-            results.append(self.to_harness_result(item_raw))
-        return results
 
     def modality_limits(self) -> dict[str, object]:
         return {

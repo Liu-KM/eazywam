@@ -152,7 +152,7 @@ EazyWAM 把推理加速做成显式 optimization profile。一个 profile 在进
 | Precision and attention | bf16/fp16/fp32、TF32、SDPA、FlashAttention、xFormers、SageAttention | bf16 默认值和 PyTorch SDPA 已部分支持；显式 backend selector 仍在规划中。SageAttention 保持 optional。 |
 | Native cache and exact runtime | FastWAM `dit_cache` (`video_kv`)、CUDA Graph、torch.compile、warmup/preallocation | FastWAM 已实现 `dit_cache` 和 `cuda_graph(auto)`；CUDA Graph 已有 SuperPod H800 加速证据。`torch_compile` 仍是 experimental，默认关闭。 |
 | WAM-specific approximate cache | TeaCache、PAB、FasterCache、cross-chunk cache、step skipping | FastWAM TeaCache L1 已实现为 opt-in 近似 action-denoise step-output cache；PAB 和 FasterCache 仍是 optional benchmark backend，不默认启用。 |
-| Throughput and serving | eval sharding、batched action denoise、dynamic batch serving、xDiT/multi-GPU | `wam serve --batch`、remote eval batching 和 FastWAM `infer_batch` 已有 smoke evidence；完整吞吐验收和 xDiT-style multi-GPU 仍在规划中。 |
+| Throughput and serving | eval sharding、batched action denoise、dynamic batch serving、xDiT/multi-GPU | 暂缓。第一版 batch-serving prototype 已从产品主路径移除；这个方向应等单请求推理加速路径稳定后重新设计。 |
 | Experimental / not default | token merging、AsymRnR、Sparse VideoGen、PTQ methods、FP8 TensorRT | 只作为研究方向跟踪；进入 runtime profile 前需要模型级 success-rate 证据。 |
 
 ## 常用命令

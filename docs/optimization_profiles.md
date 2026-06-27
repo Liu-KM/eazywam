@@ -410,12 +410,13 @@ trace_fields:
   - per_request_model_ms
   - batch_fallback_reason
 output_check: per_request_action_shape_and_success_rate
-status: planned
+status: deferred
 ```
 
-Batch serving covers future eval batching, dynamic serving batches, and
-FastWAM batched action denoise. CUDA Graph should stay disabled for dynamic
-batch sizes in the first implementation.
+Batch serving is deferred. The first prototype was removed from the product
+path because it mixed serving, eval orchestration, and backend batching too
+early. Revisit this profile after the single-request acceleration path is
+stable, with a cleaner serving contract and fresh validation.
 
 ## Experimental Methods Not In The Default Path
 

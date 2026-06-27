@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Any
 
-from eazywam.core.batching import BatchDispatchItem
 from eazywam.core.backend_capabilities import (
     action_contract_enabled,
     apply_loaded_optimization_profiles,
@@ -159,80 +158,6 @@ class BackendSession:
             ),
         )
         return result
-
-    def infer_batch_and_trace(
-        self,
-        items: list[BatchDispatchItem],
-        *,
-        batch_id: str,
-        validate_action_contract: bool | None = None,
-    ) -> list[InferenceResult]:
-        if not items:
-            return []
-        requests = [item.request for item in items]
-        dispatch_start = time.perf_counter()
-        fallback_reason = None
-        per_request_model_ms: list[float | None] = [None] * len(items)
-        infer_batch = getattr(self.backend, "infer_batch", None)
-        if callable(infer_batch):
-            raw_results = infer_batch(requests)
-            results = list(raw_results)
-        else:
-            fallback_reason = "infer_batch_unavailable"
-            results = []
-            for index, request in enumerate(requests):
-                request_start = time.perf_counter()
-                results.append(self.backend.infer(request))
-                per_request_model_ms[index] = (time.perf_counter() - request_start) * 1000
-        dispatch_ms = (time.perf_counter() - dispatch_start) * 1000
-        if len(results) != len(items):
-            raise RuntimeError(
-                f"infer_batch returned {len(results)} results for {len(items)} requests"
-            )
-
-        should_validate = (
-            action_contract_enabled(self.backend)
-            if validate_action_contract is None
-            else validate_action_contract
-        )
-        for index, (item, result) in enumerate(zip(items, results, strict=True)):
-            queue_wait_ms = max(0.0, (dispatch_start - item.enqueued_at) * 1000)
-            model_ms = per_request_model_ms[index]
-            if model_ms is None:
-                raw_model_ms = result.timing.get("model_ms")
-                model_ms = float(raw_model_ms) if isinstance(raw_model_ms, int | float) else None
-            result_fallback_reason = result.backend_metadata.get("batch_fallback_reason")
-            event_fallback_reason = (
-                fallback_reason
-                if fallback_reason is not None
-                else str(result_fallback_reason)
-                if result_fallback_reason is not None
-                else None
-            )
-            event_payload = dict(item.payload)
-            event_payload.update(
-                {
-                    "batch_id": batch_id,
-                    "request_id": item.request_id,
-                    "batch_size": len(items),
-                    "queue_wait_ms": queue_wait_ms,
-                    "dispatch_ms": dispatch_ms,
-                    "per_request_model_ms": model_ms,
-                    "batch_fallback_reason": event_fallback_reason,
-                }
-            )
-            self.trace.write(
-                item.event,
-                **event_payload,
-                **inference_result_payload(
-                    self.manifest,
-                    result,
-                    expected_horizon=item.expected_horizon,
-                    wall_ms=(time.perf_counter() - item.started_at) * 1000,
-                    validate_action_contract=should_validate,
-                ),
-            )
-        return results
 
     def close(self) -> None:
         if self.closed:

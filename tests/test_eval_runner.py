@@ -1,6 +1,5 @@
 import json
 import sys
-import threading
 import types
 
 import pytest
@@ -24,7 +23,6 @@ from eazywam.evals.robotwin import (
     _runtime_options as robotwin_runtime_options,
 )
 from eazywam.processors.passthrough import PassthroughProcessor
-from eazywam.serve import serve
 
 
 def test_real_eval_manifests_load() -> None:
@@ -90,9 +88,6 @@ def test_libero_runtime_options_include_acceleration_modes(tmp_path) -> None:
         num_inference_steps=10,
         output_dir=tmp_path,
         cache_dir=tmp_path / "cache",
-        batch_endpoint=None,
-        shard_id=0,
-        num_shards=1,
         values={
             "scheduler_name": "fastwam_flowmatch_euler",
             "schedule_type": "shifted_flowmatch",
@@ -134,9 +129,6 @@ def test_robotwin_runtime_options_include_acceleration_modes(tmp_path) -> None:
         output_dir=tmp_path,
         cache_dir=tmp_path / "cache",
         robotwin_root=tmp_path / "RoboTwin",
-        batch_endpoint=None,
-        shard_id=0,
-        num_shards=1,
         values={
             "num_inference_steps": 10,
             "scheduler_name": "fastwam_flowmatch_euler",
@@ -210,32 +202,6 @@ def test_eval_runner_native_dry_run_is_default_for_fastwam_single_task(tmp_path)
     assert summary.command.env["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] == "1"
     assert summary.command.env["TOKENIZERS_PARALLELISM"] == "false"
     assert summary.command.env["WANDB_MODE"] == "offline"
-
-
-def test_eval_runner_native_dry_run_records_shard_plan(tmp_path) -> None:
-    summary = EvalRunner().run(
-        model_id="fastwam-libero",
-        trace_dir=tmp_path,
-        cache_dir=tmp_path / "cache",
-        dry_run=True,
-        overrides={
-            "task_id": "0",
-            "num_trials": "5",
-            "shard_id": "1",
-            "num_shards": "2",
-            "batch_endpoint": "http://127.0.0.1:8000",
-        },
-    )
-
-    events = [
-        json.loads(line)
-        for line in summary.trace_path.read_text(encoding="utf-8").splitlines()
-    ]
-    plan = next(event for event in events if event["event"] == "native_eval_plan")
-    assert plan["batch_endpoint"] == "http://127.0.0.1:8000"
-    assert plan["shard_id"] == 1
-    assert plan["num_shards"] == 2
-    assert plan["selected_episode_indices"] == [1, 3]
 
 
 def test_eval_runner_reference_mode_stays_available_for_fastwam(tmp_path) -> None:
@@ -798,57 +764,6 @@ def test_cli_eval_without_reference_runs_simulator_eval_plan(capsys, tmp_path) -
     assert "Traceback" not in captured.err
 
 
-def test_cli_merge_eval_shards(capsys, tmp_path) -> None:
-    shard0 = tmp_path / "shard0.json"
-    shard1 = tmp_path / "shard1.json"
-    output = tmp_path / "merged.json"
-    shard0.write_text(
-        json.dumps(
-            {
-                "metrics": {
-                    "requested_episodes": 5,
-                    "total_episodes": 3,
-                    "successes": 2,
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    shard1.write_text(
-        json.dumps(
-            {
-                "metrics": {
-                    "requested_episodes": 5,
-                    "total_episodes": 2,
-                    "successes": 2,
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    exit_code = main(
-        [
-            "merge-eval-shards",
-            str(shard0),
-            str(shard1),
-            "--output",
-            str(output),
-        ]
-    )
-
-    captured = capsys.readouterr()
-    payload = json.loads(captured.out)
-    assert exit_code == 0
-    assert payload == json.loads(output.read_text(encoding="utf-8"))
-    assert payload["requested_episodes"] == 5
-    assert payload["completed_episodes"] == 5
-    assert payload["successes"] == 4
-    assert payload["failed_episodes"] == 1
-    assert payload["skipped_episodes"] == 0
-    assert payload["success_rate"] == 0.8
-
-
 def test_eval_runner_native_libero_loop_runs_without_subprocess(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("subprocess.run", _fail_subprocess_run)
     _install_fake_libero(monkeypatch, tmp_path)
@@ -903,113 +818,6 @@ def test_eval_runner_native_libero_loop_runs_without_subprocess(monkeypatch, tmp
     assert report.expected_trials == 2
 
 
-def test_eval_runner_native_libero_can_use_remote_batch_endpoint(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    monkeypatch.setattr("subprocess.run", _fail_subprocess_run)
-    _install_fake_libero(monkeypatch, tmp_path)
-    registry = _fake_libero_registry()
-    server = serve(
-        "fake-open-loop",
-        port=0,
-        trace_dir=tmp_path / "server",
-        batch_enabled=True,
-        max_batch_size=2,
-        max_wait_time=0.01,
-    )
-    host, port = server.server_address
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        summary = EvalRunner(registry).run(
-            model_id="fake-libero",
-            trace_dir=tmp_path / "worker",
-            cache_dir=tmp_path / "cache",
-            dry_run=False,
-            overrides={
-                "num_trials": "1",
-                "num_steps_wait": "0",
-                "action_horizon": "2",
-                "replan_steps": "1",
-                "max_steps": "3",
-                "batch_endpoint": f"http://{host}:{port}",
-                "shard_id": "0",
-                "num_shards": "1",
-            },
-        )
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
-
-    assert summary.status == "ok"
-    assert summary.metrics["success_rate"] == 1.0
-    worker_events = [
-        json.loads(line)
-        for line in summary.trace_path.read_text(encoding="utf-8").splitlines()
-    ]
-    worker_names = [event["event"] for event in worker_events]
-    assert "backend_load" not in worker_names
-    assert "remote_batch_endpoint" in worker_names
-    inference = [event for event in worker_events if event["event"] == "inference_end"][0]
-    assert inference["remote_batch_endpoint"] == f"http://{host}:{port}"
-    assert inference["shard_id"] == 0
-    assert inference["num_shards"] == 1
-
-    server_trace = next((tmp_path / "server").glob("*/trace.jsonl"))
-    server_events = [
-        json.loads(line)
-        for line in server_trace.read_text(encoding="utf-8").splitlines()
-    ]
-    assert "batch_request_enqueued" in [event["event"] for event in server_events]
-    server_inference = [
-        event for event in server_events if event["event"] == "serve_request_end"
-    ][0]
-    assert server_inference["batch_size"] == 1
-
-
-def test_eval_runner_native_libero_runs_only_selected_shard(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    monkeypatch.setattr("subprocess.run", _fail_subprocess_run)
-    _install_fake_libero(monkeypatch, tmp_path)
-    registry = _fake_libero_registry()
-
-    summary = EvalRunner(registry).run(
-        model_id="fake-libero",
-        trace_dir=tmp_path,
-        cache_dir=tmp_path / "cache",
-        dry_run=False,
-        overrides={
-            "num_trials": "5",
-            "num_steps_wait": "0",
-            "action_horizon": "2",
-            "replan_steps": "1",
-            "max_steps": "3",
-            "shard_id": "1",
-            "num_shards": "2",
-        },
-    )
-
-    assert summary.status == "ok"
-    assert summary.metrics["requested_episodes"] == 5
-    assert summary.metrics["total_episodes"] == 2
-    assert summary.metrics["selected_episode_indices"] == [1, 3]
-    assert summary.metrics["success_episodes"] == [1, 3]
-    assert summary.metrics["success_rate"] == 1.0
-    events = [
-        json.loads(line)
-        for line in summary.trace_path.read_text(encoding="utf-8").splitlines()
-    ]
-    assert [
-        event["episode_id"]
-        for event in events
-        if event["event"] == "episode_start"
-    ] == [1, 3]
-
-
 def test_eval_runner_native_robotwin_policy_runs_without_subprocess(
     monkeypatch,
     tmp_path,
@@ -1058,48 +866,6 @@ def test_eval_runner_native_robotwin_policy_runs_without_subprocess(
     assert events[-2]["success_rate"] == 1.0
     assert events[-1]["event"] == "run_end"
     assert events[-1]["status"] == "ok"
-
-
-def test_eval_runner_native_robotwin_runs_only_selected_shard(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    monkeypatch.setattr("subprocess.run", _fail_subprocess_run)
-    robotwin_root = tmp_path / "RoboTwin"
-    _install_fake_robotwin(robotwin_root, monkeypatch)
-    registry = _fake_robotwin_registry(robotwin_root)
-
-    summary = EvalRunner(registry).run(
-        model_id="fake-robotwin",
-        trace_dir=tmp_path,
-        cache_dir=tmp_path / "cache",
-        dry_run=False,
-        overrides={
-            "task_name": "click_alarmclock",
-            "num_episodes": "5",
-            "action_horizon": "2",
-            "replan_steps": "1",
-            "robotwin_root": str(robotwin_root),
-            "shard_id": "1",
-            "num_shards": "2",
-        },
-    )
-
-    assert summary.status == "ok"
-    assert summary.metrics["requested_episodes"] == 5
-    assert summary.metrics["total_episodes"] == 2
-    assert summary.metrics["valid_episodes"] == 2
-    assert summary.metrics["selected_episode_indices"] == [1, 3]
-    assert summary.metrics["success_rate"] == 1.0
-    events = [
-        json.loads(line)
-        for line in summary.trace_path.read_text(encoding="utf-8").splitlines()
-    ]
-    assert [
-        event["episode_id"]
-        for event in events
-        if event["event"] == "episode_start"
-    ] == [1, 3]
 
 
 def test_libero_importer_handles_inner_package_exposed_as_top_level(

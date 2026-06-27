@@ -156,7 +156,7 @@ profile contract.
 | Precision and attention | bf16/fp16/fp32, TF32, SDPA, FlashAttention, xFormers, SageAttention | bf16 defaults and PyTorch SDPA are partially supported; explicit backend selectors are planned. SageAttention stays optional. |
 | Native cache and exact runtime | FastWAM `dit_cache` (`video_kv`), CUDA Graph, torch.compile, warmup/preallocation | `dit_cache` and `cuda_graph(auto)` are implemented for FastWAM; CUDA Graph has SuperPod H800 speedup evidence. `torch_compile` is experimental and disabled by default. |
 | WAM-specific approximate cache | TeaCache, PAB, FasterCache, cross-chunk cache, step skipping | FastWAM TeaCache L1 is implemented as an opt-in approximate action-denoise step-output cache; PAB and FasterCache remain optional benchmark backends, not defaults. |
-| Throughput and serving | eval sharding, batched action denoise, dynamic batch serving, xDiT/multi-GPU | `wam serve --batch`, remote eval batching, and FastWAM `infer_batch` have smoke evidence; full throughput acceptance and xDiT-style multi-GPU remain planned. |
+| Throughput and serving | eval sharding, batched action denoise, dynamic batch serving, xDiT/multi-GPU | Deferred. The first batch-serving prototype was removed from the product path; this track should be redesigned after the single-request acceleration path is stable. |
 | Experimental / not default | token merging, AsymRnR, Sparse VideoGen, PTQ methods, FP8 TensorRT | Tracked as research directions only; they need model-specific success-rate evidence before becoming runtime profiles. |
 
 ## Commands

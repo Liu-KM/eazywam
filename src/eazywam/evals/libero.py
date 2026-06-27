@@ -11,10 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from eazywam.core._utils import default_cache_dir
-from eazywam.core.batch_client import RemoteInferenceClient
-from eazywam.core.eval_sharding import episode_indices
 from eazywam.core.eval_runner import EvalCommand, EvalRunnerError, EvalSummary
-from eazywam.core.inference_trace import inference_result_payload, observation_summary
+from eazywam.core.inference_trace import observation_summary
 from eazywam.core.invocation import Invocation
 from eazywam.core.registry import Registry
 from eazywam.core.runtime import RuntimeSpec
@@ -52,9 +50,6 @@ class _EvalContext:
     num_inference_steps: int | None
     output_dir: Path
     cache_dir: Path
-    batch_endpoint: str | None
-    shard_id: int
-    num_shards: int
     values: dict[str, Any]
 
 
@@ -159,14 +154,6 @@ class LiberoSingleTaskEvalRunner:
                 task_id=context.task_id,
                 num_trials=context.num_trials,
                 seed=context.seed,
-                batch_endpoint=context.batch_endpoint,
-                shard_id=context.shard_id,
-                num_shards=context.num_shards,
-                selected_episode_indices=episode_indices(
-                    context.num_trials,
-                    shard_id=context.shard_id,
-                    num_shards=context.num_shards,
-                ),
                 max_steps=context.max_steps,
                 num_steps_wait=context.num_steps_wait,
                 action_horizon=context.action_horizon,
@@ -208,17 +195,9 @@ class LiberoSingleTaskEvalRunner:
                 )
                 task_description = str(getattr(task, "language", ""))
 
-                if context.batch_endpoint is None:
-                    stage = "backend_start"
-                    invocation.start_backend(require_ready=True)
-                    runtime_info = invocation.runtime_info
-                else:
-                    invocation.trace.write(
-                        "remote_batch_endpoint",
-                        endpoint=context.batch_endpoint,
-                        shard_id=context.shard_id,
-                        num_shards=context.num_shards,
-                    )
+                stage = "backend_start"
+                invocation.start_backend(require_ready=True)
+                runtime_info = invocation.runtime_info
 
                 stage = "libero_eval"
                 metrics = self._run_task(
@@ -232,10 +211,10 @@ class LiberoSingleTaskEvalRunner:
                 metrics["task_suite"] = context.task_suite_name
                 metrics["task_id"] = context.task_id
                 metrics["task_description"] = task_description
-                total_episodes = int(metrics.get("total_episodes", context.num_trials))
+                metrics["total_episodes"] = context.num_trials
                 metrics["success_rate"] = (
-                    float(metrics["successes"]) / float(total_episodes)
-                    if total_episodes
+                    float(metrics["successes"]) / float(context.num_trials)
+                    if context.num_trials
                     else 0.0
                 )
                 metrics["results_path"] = str(_write_results(context, metrics))
@@ -247,11 +226,7 @@ class LiberoSingleTaskEvalRunner:
                     task_suite_name=context.task_suite_name,
                     task_id=context.task_id,
                     successes=metrics["successes"],
-                    requested_episodes=context.num_trials,
-                    total_episodes=total_episodes,
-                    selected_episode_indices=metrics.get("selected_episode_indices", []),
-                    shard_id=context.shard_id,
-                    num_shards=context.num_shards,
+                    total_episodes=context.num_trials,
                     success_rate=metrics["success_rate"],
                     results_path=metrics["results_path"],
                 )
@@ -317,19 +292,9 @@ class LiberoSingleTaskEvalRunner:
         success_episodes: list[int] = []
         failure_episodes: list[int] = []
         episodes: list[dict[str, object]] = []
-        selected_episode_indices = episode_indices(
-            context.num_trials,
-            shard_id=context.shard_id,
-            num_shards=context.num_shards,
-        )
         start = time.perf_counter()
-        remote_client = (
-            RemoteInferenceClient(context.batch_endpoint)
-            if context.batch_endpoint is not None
-            else None
-        )
         try:
-            for episode_idx in selected_episode_indices:
+            for episode_idx in range(context.num_trials):
                 episode = self._run_episode(
                     invocation=invocation,
                     env=env,
@@ -337,7 +302,6 @@ class LiberoSingleTaskEvalRunner:
                     task_description=task_description,
                     context=context,
                     episode_idx=episode_idx,
-                    remote_client=remote_client,
                 )
                 steps_total += int(episode["steps"])
                 model_calls_total += int(episode["model_calls"])
@@ -359,11 +323,6 @@ class LiberoSingleTaskEvalRunner:
             "steps": steps_total,
             "model_calls": model_calls_total,
             "episodes": episodes,
-            "requested_episodes": context.num_trials,
-            "total_episodes": len(selected_episode_indices),
-            "selected_episode_indices": selected_episode_indices,
-            "shard_id": context.shard_id,
-            "num_shards": context.num_shards,
             "duration_s": time.perf_counter() - start,
         }
 
@@ -376,7 +335,6 @@ class LiberoSingleTaskEvalRunner:
         task_description: str,
         context: _EvalContext,
         episode_idx: int,
-        remote_client: RemoteInferenceClient | None,
     ) -> dict[str, object]:
         session = invocation.session
         trace = invocation.trace
@@ -433,7 +391,7 @@ class LiberoSingleTaskEvalRunner:
                     action_horizon=context.action_horizon,
                     replan_steps=context.replan_steps,
                     optimization_profiles=invocation.profiles,
-                    reset=model_calls == 0 and remote_client is None,
+                    reset=model_calls == 0,
                     runtime_options=_runtime_options(context),
                 )
                 trace.write(
@@ -442,36 +400,18 @@ class LiberoSingleTaskEvalRunner:
                     step_id=steps,
                     replan_id=replan_id,
                 )
-                inference_payload = {
-                    "episode_id": episode_idx,
-                    "step_id": steps,
-                    "replan_id": replan_id,
-                    "action_horizon": context.action_horizon,
-                    "replan_steps": context.replan_steps,
-                    "shard_id": context.shard_id,
-                    "num_shards": context.num_shards,
-                }
-                if remote_client is not None:
-                    remote_start = time.perf_counter()
-                    result = remote_client.infer(request)
-                    trace.write(
-                        "inference_end",
-                        **inference_payload,
-                        remote_batch_endpoint=context.batch_endpoint,
-                        **inference_result_payload(
-                            invocation.manifest,
-                            result,
-                            expected_horizon=context.action_horizon,
-                            wall_ms=(time.perf_counter() - remote_start) * 1000,
-                        ),
-                    )
-                else:
-                    result = session.infer_and_trace(
-                        request,
-                        event="inference_end",
-                        expected_horizon=context.action_horizon,
-                        payload=inference_payload,
-                    )
+                result = session.infer_and_trace(
+                    request,
+                    event="inference_end",
+                    expected_horizon=context.action_horizon,
+                    payload={
+                        "episode_id": episode_idx,
+                        "step_id": steps,
+                        "replan_id": replan_id,
+                        "action_horizon": context.action_horizon,
+                        "replan_steps": context.replan_steps,
+                    },
+                )
                 pending_actions = [
                     [float(value) for value in row]
                     for row in result.action_chunk.actions[: context.replan_steps]
@@ -549,8 +489,6 @@ def _build_context(
         if max_steps_value is not None
         else LIBERO_MAX_STEPS.get(task_suite_name, 700)
     )
-    num_shards = _num_shards(values)
-    shard_id = _shard_id(values, num_shards=num_shards)
     return _EvalContext(
         task_suite_name=task_suite_name,
         task_id=task_id,
@@ -563,9 +501,6 @@ def _build_context(
         num_inference_steps=_optional_int(values.get("num_inference_steps")),
         output_dir=output_dir,
         cache_dir=Path(str(values["cache_dir"])),
-        batch_endpoint=_optional_endpoint(values.get("batch_endpoint")),
-        shard_id=shard_id,
-        num_shards=num_shards,
         values=values,
     )
 
@@ -911,28 +846,6 @@ def _optional_int(value: object) -> int | None:
     if value is None or value == "":
         return None
     return _positive_int(value, "optional integer", allow_zero=True)
-
-
-def _optional_endpoint(value: object) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text or text.lower() in {"none", "null"}:
-        return None
-    return text
-
-
-def _num_shards(values: dict[str, Any]) -> int:
-    return _positive_int(values.get("num_shards", 1), "num_shards")
-
-
-def _shard_id(values: dict[str, Any], *, num_shards: int) -> int:
-    shard_id = _positive_int(values.get("shard_id", 0), "shard_id", allow_zero=True)
-    if shard_id >= num_shards:
-        raise EvalRunnerError(
-            f"shard_id must be smaller than num_shards; got {shard_id} >= {num_shards}"
-        )
-    return shard_id
 
 
 def _json_safe(value: Any) -> Any:
