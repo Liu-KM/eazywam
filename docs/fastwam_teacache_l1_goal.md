@@ -50,7 +50,8 @@ action denoise 循环里复用部分 DiT/MoT 中间结果或 step output，让�
 - 只有当模型 infer_action 签名支持对应参数时才传入，沿用现有 cuda_graph /
   torch_compile 的兼容风格。
 - backend metadata 要透传 native model 返回的 teacache_* 字段。
-- batch 路径先不要启用 TeaCache；如果遇到 infer_batch，明确记录 fallback 或关闭。
+- batch 路径已从产品主路径暂缓；TeaCache L1 只覆盖单请求 FastWAM inference，
+  不再把批处理入口作为当前实现目标或新的 fallback 合同。
 
 第三层：FastWAM native model
 - 在 src/fastwam/models/wan22/fastwam.py 的 infer_action action denoise 循环中接入

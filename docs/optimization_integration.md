@@ -75,11 +75,17 @@ The current families are:
 | `native_cache` | Use model-native request-local caches. | FastWAM `dit_cache` / `video_kv`. |
 | `feature_cache` | Reuse or approximate intermediate DiT features. | `teacache`, PAB, FasterCache. |
 | `graph_compile` | Reduce Python/kernel launch overhead. | `cuda_graph`, `torch_compile`. |
-| `batch_serving` | Improve eval and serving throughput. | eval sharding, dynamic batches, batched action denoise. |
+| `batch_serving` | Deferred throughput/serving family; not in the current product path. | Deferred eval sharding, dynamic batches, batched action denoise. |
 
 Important naming rule: FastWAM `dit_cache` is the existing request-local video
 K/V cache. TeaCache is a separate profile named `teacache`; do not merge its
 semantics into `dit_cache`.
+
+Current optimization implementation should stay on single-request FastWAM
+inference acceleration: `dit_cache(video_kv)`, `cuda_graph(auto)`, the opt-in
+`scheduler` profile, TeaCache L1 as an opt-in approximate cache, and experimental
+opt-in `torch_compile`. Batch serving is deferred and should not be treated as a
+current batch-inference API or batch runner commitment.
 
 ## Optimization Profile Shape
 
@@ -226,9 +232,9 @@ and `torch_compile_wall_ms`. When `teacache` is requested or disabled, metadata
 should include `teacache_enabled`, `teacache_mode`, `teacache_threshold`,
 `teacache_warmup_steps`, `teacache_hit_rate`, `teacache_skipped_steps`,
 `teacache_drift_score`, and `teacache_fallback_reason` so cached and uncached
-runs can be compared. The L1 FastWAM batch path explicitly disables TeaCache and
-records `teacache_fallback_reason=batch_unsupported` if the profile or runtime
-option requested it.
+runs can be compared. TeaCache L1 evidence is single-request only. Batch serving
+remains deferred, so batch-specific TeaCache fallback values are historical
+runtime details rather than a current product contract.
 
 VLA-Cache is the cleanest first candidate because it already exposes a direct
 on/off flag. FASTER is valuable for action-chunk scheduling and streaming

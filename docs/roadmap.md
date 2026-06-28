@@ -153,6 +153,12 @@ not part of the harness contract.
 
 Goal: show that a real acceleration method can be enabled as a profile.
 
+Current product work is the single-request FastWAM inference acceleration path:
+`dit_cache(video_kv)`, `cuda_graph(auto)`, the opt-in `scheduler` profile,
+TeaCache L1 as an opt-in approximate cache, and experimental opt-in
+`torch_compile`. Batch serving remains deferred and is not a current promise for
+a new batch runner, batch-inference API, or serving implementation.
+
 - First target: DreamZero `dit_cache` or Cosmos parallel/JPEG profiles if those
   are already exposed by the official evaluator.
 - FastWAM `dit_cache` L1 is the request-local video K/V cache profile:
@@ -188,7 +194,7 @@ Goal: make acceleration work composable before adding more tricks.
 - Keep `docs/optimization_profiles.md` as the canonical profile-card contract.
 - Classify every acceleration method by family: action runtime, output control,
   scheduler, dtype, attention backend, native cache, feature cache,
-  graph/compile, batch serving, or experimental.
+  graph/compile, deferred batch serving, or experimental.
 - Require each profile to declare parameters, requirements, conflicts, trace
   fields, output checks, and rollout status before implementation.
 - Keep current FastWAM `dit_cache` semantics stable: it is the request-local

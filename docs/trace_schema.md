@@ -244,10 +244,11 @@ parsing. Standard field groups are:
 
 `teacache_fallback_reason=null` means the requested TeaCache state was honored.
 Known non-null values include `requires_video_kv_cache` when the request did
-not use the exact FastWAM `dit_cache(video_kv)` path, `batch_unsupported` when
-FastWAM batch inference explicitly disabled TeaCache, and
+not use the exact FastWAM `dit_cache(video_kv)` path and
 `teacache_hook_unavailable` when the loaded native model lacks the action-step
-TeaCache hook.
+TeaCache hook. Batch serving is deferred; batch-specific TeaCache fallback
+strings from earlier prototypes are historical runtime details, not current
+product contract values.
 
 For `serve` mode, startup emits backend load/warmup/reset events before
 `serve_ready`. Each `/infer` request emits `serve_request_start` and

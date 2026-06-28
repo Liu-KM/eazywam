@@ -144,6 +144,11 @@ EazyWAM 把推理加速做成显式 optimization profile。一个 profile 在进
 必须声明作用范围、参数、trace 字段、输出检查和 rollout 状态。完整 profile 合同见
 [`docs/optimization_profiles.md`](docs/optimization_profiles.md)。
 
+当前公开优化主线是单请求 FastWAM 推理加速：`dit_cache(video_kv)`、
+`cuda_graph(auto)`、opt-in `scheduler` profile、opt-in 近似缓存 TeaCache
+L1，以及 experimental opt-in `torch_compile`。暂缓的 batch serving 不在当前
+产品主路径内，不承诺新的 batch serving runner 或批处理入口。
+
 | 类别 | 技术 | 当前状态 |
 | --- | --- | --- |
 | Policy runtime | action chunking、receding horizon、execute horizon、temporal ensemble | runner 已实现 `action_horizon` 和 `replan_steps`；`execute_horizon` 和 `temporal_ensemble` 仍在规划中。 |

@@ -148,6 +148,12 @@ before it becomes a default path. See
 [`docs/optimization_profiles.md`](docs/optimization_profiles.md) for the full
 profile contract.
 
+The current public optimization mainline is single-request FastWAM inference
+acceleration: `dit_cache(video_kv)`, `cuda_graph(auto)`, the opt-in `scheduler`
+profile, TeaCache L1 as an opt-in approximate cache, and experimental opt-in
+`torch_compile`. Deferred batch serving is outside the current product path and
+does not imply a new batch serving runner or batch-inference API.
+
 | Category | Techniques | Current status |
 | --- | --- | --- |
 | Policy runtime | action chunking, receding horizon, execute horizon, temporal ensemble | `action_horizon` and `replan_steps` are implemented in the runner; `execute_horizon` and `temporal_ensemble` are planned. |
