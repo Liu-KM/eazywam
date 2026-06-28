@@ -166,7 +166,9 @@ metadata:
 - `scheduler_name`: `fastwam_flowmatch_euler`
 - `solver`: `euler`
 - `schedule_type`: `shifted_flowmatch`
-- `schedule_source`: `generated`, `custom_timesteps`, or `custom_sigmas`
+- `schedule_preset`: `null`, `shifted_flowmatch`, `karras`, or `ays`
+- `schedule_source`: `generated`, `custom_timesteps`, `custom_sigmas`,
+  `preset_shifted_flowmatch`, `preset_karras`, or `preset_ays`
 - `num_inference_steps`
 - `sigma_shift`
 - `timestep_count`

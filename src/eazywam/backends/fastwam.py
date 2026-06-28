@@ -299,8 +299,11 @@ class FastWAMModelAdapter(NativeModelAdapter):
             infer_kwargs["scheduler_name"] = scheduler_name
         if self._infer_action_accepts("schedule_type"):
             infer_kwargs["schedule_type"] = schedule_type
-        timesteps = self._scheduler_timesteps(request)
-        sigmas = self._scheduler_sigmas(request)
+        timesteps, sigmas, schedule_preset = self._scheduler_schedule_inputs(request)
+        if schedule_preset is not None:
+            if not self._infer_action_accepts("schedule_preset"):
+                raise self.error_cls("loaded FastWAM model does not accept scheduler schedule_preset")
+            infer_kwargs["schedule_preset"] = schedule_preset
         if timesteps is not None:
             if not self._infer_action_accepts("timesteps"):
                 raise self.error_cls("loaded FastWAM model does not accept custom scheduler timesteps")
@@ -428,15 +431,57 @@ class FastWAMModelAdapter(NativeModelAdapter):
             configured = self.scheduler_params.get("schedule_type")
         return str(configured or "shifted_flowmatch")
 
-    def _scheduler_timesteps(self, request: InferenceRequest) -> object | None:
-        if "timesteps" in request.runtime_options:
-            return request.runtime_options["timesteps"]
-        return self.scheduler_params.get("timesteps")
+    def _scheduler_schedule_inputs(
+        self,
+        request: InferenceRequest,
+    ) -> tuple[object | None, object | None, str | None]:
+        runtime_timesteps = request.runtime_options.get("timesteps")
+        runtime_sigmas = request.runtime_options.get("sigmas")
+        runtime_preset = _optional_scheduler_text(request.runtime_options.get("schedule_preset"))
+        runtime_selected = self._selected_scheduler_schedule_inputs(
+            timesteps=runtime_timesteps,
+            sigmas=runtime_sigmas,
+            schedule_preset=runtime_preset,
+        )
+        if len(runtime_selected) > 1:
+            raise self.error_cls(
+                "FastWAM scheduler runtime schedule inputs are mutually exclusive: "
+                + ", ".join(runtime_selected)
+            )
+        if runtime_selected:
+            return runtime_timesteps, runtime_sigmas, runtime_preset
 
-    def _scheduler_sigmas(self, request: InferenceRequest) -> object | None:
-        if "sigmas" in request.runtime_options:
-            return request.runtime_options["sigmas"]
-        return self.scheduler_params.get("sigmas")
+        profile_timesteps = self.scheduler_params.get("timesteps")
+        profile_sigmas = self.scheduler_params.get("sigmas")
+        profile_preset = _optional_scheduler_text(self.scheduler_params.get("schedule_preset"))
+        profile_selected = self._selected_scheduler_schedule_inputs(
+            timesteps=profile_timesteps,
+            sigmas=profile_sigmas,
+            schedule_preset=profile_preset,
+        )
+        if len(profile_selected) > 1:
+            raise self.error_cls(
+                "FastWAM scheduler profile schedule inputs are mutually exclusive: "
+                + ", ".join(profile_selected)
+            )
+        return profile_timesteps, profile_sigmas, profile_preset
+
+    def _selected_scheduler_schedule_inputs(
+        self,
+        *,
+        timesteps: object | None,
+        sigmas: object | None,
+        schedule_preset: str | None,
+    ) -> list[str]:
+        return [
+            name
+            for name, value in (
+                ("timesteps", timesteps),
+                ("sigmas", sigmas),
+                ("schedule_preset", schedule_preset),
+            )
+            if value is not None
+        ]
 
     def _num_video_frames(self) -> int:
         if self.cfg is None:
@@ -1040,6 +1085,15 @@ def _optional_scheduler_float(value: object) -> float | None:
     if isinstance(value, str) and value.strip().lower() in {"", "none", "null"}:
         return None
     return _optional_float(value)
+
+
+def _optional_scheduler_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text.lower() in {"", "none", "null"}:
+        return None
+    return text
 
 
 def _normalize_cuda_graph_mode(value: object) -> str:

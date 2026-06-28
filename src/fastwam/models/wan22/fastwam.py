@@ -1109,6 +1109,7 @@ class FastWAM(torch.nn.Module):
         sigma_shift: Optional[float] = None,
         scheduler_name: str = "fastwam_flowmatch_euler",
         schedule_type: str = "shifted_flowmatch",
+        schedule_preset: object | None = None,
         timesteps: object | None = None,
         sigmas: object | None = None,
         seed: Optional[int] = None,
@@ -1130,6 +1131,7 @@ class FastWAM(torch.nn.Module):
                 sigma_shift=sigma_shift,
                 scheduler_name=scheduler_name,
                 schedule_type=schedule_type,
+                schedule_preset=schedule_preset,
                 timesteps=timesteps,
                 sigmas=sigmas,
                 seed=seed,
@@ -1236,6 +1238,7 @@ class FastWAM(torch.nn.Module):
             shift_override=sigma_shift,
             timesteps=timesteps,
             sigmas=sigmas,
+            schedule_preset=schedule_preset,
         )
         infer_timesteps_action, infer_deltas_action = self.infer_action_scheduler.build_inference_schedule(
             num_inference_steps=num_inference_steps,
@@ -1244,6 +1247,7 @@ class FastWAM(torch.nn.Module):
             shift_override=sigma_shift,
             timesteps=timesteps,
             sigmas=sigmas,
+            schedule_preset=schedule_preset,
         )
         for step_t_video, step_delta_video, step_t_action, step_delta_action in zip(
             infer_timesteps_video,
@@ -1299,6 +1303,7 @@ class FastWAM(torch.nn.Module):
         sigma_shift: Optional[float] = None,
         scheduler_name: str = "fastwam_flowmatch_euler",
         schedule_type: str = "shifted_flowmatch",
+        schedule_preset: object | None = None,
         timesteps: object | None = None,
         sigmas: object | None = None,
         seed: Optional[int] = None,
@@ -1462,12 +1467,15 @@ class FastWAM(torch.nn.Module):
             shift_override=sigma_shift,
             timesteps=timesteps,
             sigmas=sigmas,
+            schedule_preset=schedule_preset,
         )
         schedule_source = "generated"
         if sigmas is not None:
             schedule_source = "custom_sigmas"
         elif timesteps is not None:
             schedule_source = "custom_timesteps"
+        elif schedule_preset is not None and str(schedule_preset).strip().lower() not in {"", "none", "null"}:
+            schedule_source = f"preset_{str(schedule_preset).strip().lower().replace('-', '_')}"
         scheduler_metadata = self.infer_action_scheduler.inference_schedule_metadata(
             num_inference_steps=num_inference_steps,
             timesteps=infer_timesteps_action,
@@ -1475,6 +1483,7 @@ class FastWAM(torch.nn.Module):
             shift_override=sigma_shift,
             schedule_type=schedule_type,
             schedule_source=schedule_source,
+            schedule_preset=schedule_preset,
         )
         denoise_start = time.perf_counter()
         teacache_step_cache = _TeaCacheStepCache()

@@ -798,6 +798,7 @@ def _runtime_options(context: _EvalContext) -> dict[str, object]:
     for key in (
         "scheduler_name",
         "schedule_type",
+        "schedule_preset",
         "sigma_shift",
         "timesteps",
         "sigmas",

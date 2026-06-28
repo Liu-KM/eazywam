@@ -91,6 +91,7 @@ def test_libero_runtime_options_include_acceleration_modes(tmp_path) -> None:
         values={
             "scheduler_name": "fastwam_flowmatch_euler",
             "schedule_type": "shifted_flowmatch",
+            "schedule_preset": "karras",
             "sigma_shift": "3.0",
             "timesteps": "1000,500,250,125",
             "dit_cache_mode": "video_kv",
@@ -106,6 +107,7 @@ def test_libero_runtime_options_include_acceleration_modes(tmp_path) -> None:
         "num_inference_steps": 10,
         "scheduler_name": "fastwam_flowmatch_euler",
         "schedule_type": "shifted_flowmatch",
+        "schedule_preset": "karras",
         "sigma_shift": "3.0",
         "timesteps": "1000,500,250,125",
         "dit_cache_mode": "video_kv",
@@ -133,6 +135,7 @@ def test_robotwin_runtime_options_include_acceleration_modes(tmp_path) -> None:
             "num_inference_steps": 10,
             "scheduler_name": "fastwam_flowmatch_euler",
             "schedule_type": "shifted_flowmatch",
+            "schedule_preset": "ays",
             "sigma_shift": "3.0",
             "sigmas": "1.0,0.5,0.25,0.125",
             "dit_cache_mode": "video_kv",
@@ -148,6 +151,7 @@ def test_robotwin_runtime_options_include_acceleration_modes(tmp_path) -> None:
         "num_inference_steps": 10,
         "scheduler_name": "fastwam_flowmatch_euler",
         "schedule_type": "shifted_flowmatch",
+        "schedule_preset": "ays",
         "sigma_shift": "3.0",
         "sigmas": "1.0,0.5,0.25,0.125",
         "dit_cache_mode": "video_kv",
@@ -171,6 +175,7 @@ def test_eval_runner_native_dry_run_is_default_for_fastwam_single_task(tmp_path)
             "num_trials": "1",
             "num_inference_steps": "6",
             "sigma_shift": "3.0",
+            "schedule_preset": "karras",
         },
     )
 
@@ -199,6 +204,7 @@ def test_eval_runner_native_dry_run_is_default_for_fastwam_single_task(tmp_path)
     assert events[1]["runtime_options"]["sigma_shift"] == "3.0"
     assert events[1]["runtime_options"]["scheduler_name"] == "fastwam_flowmatch_euler"
     assert events[1]["runtime_options"]["schedule_type"] == "shifted_flowmatch"
+    assert events[1]["runtime_options"]["schedule_preset"] == "karras"
     assert summary.command.env["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] == "1"
     assert summary.command.env["TOKENIZERS_PARALLELISM"] == "false"
     assert summary.command.env["WANDB_MODE"] == "offline"
@@ -261,6 +267,7 @@ def test_eval_runner_native_robotwin_dry_run_is_default(tmp_path) -> None:
             "num_episodes": "1",
             "num_inference_steps": "6",
             "sigma_shift": "3.0",
+            "schedule_preset": "ays",
         },
     )
 
@@ -288,6 +295,7 @@ def test_eval_runner_native_robotwin_dry_run_is_default(tmp_path) -> None:
     assert plan["runtime_options"]["sigma_shift"] == "3.0"
     assert plan["runtime_options"]["scheduler_name"] == "fastwam_flowmatch_euler"
     assert plan["runtime_options"]["schedule_type"] == "shifted_flowmatch"
+    assert plan["runtime_options"]["schedule_preset"] == "ays"
 
 
 def test_eval_runner_dry_run_plans_fastwam_robotwin_manager(tmp_path) -> None:

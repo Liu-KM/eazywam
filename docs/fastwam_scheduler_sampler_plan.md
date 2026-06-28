@@ -42,18 +42,26 @@ Implemented first:
 
 - `scheduler_name=fastwam_flowmatch_euler`
 - `schedule_type=shifted_flowmatch`
+- optional `schedule_preset=shifted_flowmatch|karras|ays`
 - configurable `num_inference_steps`
 - configurable `sigma_shift`
 - Diffusers-style custom `timesteps` or custom `sigmas` as mutually exclusive
   explicit profile/runtime options
 - trace metadata for timesteps, sigmas, deltas, denoise wall time, and total
   harness timing, plus `schedule_source` to distinguish generated, custom
-  timestep, and custom sigma schedules
+  timestep, custom sigma, and named preset schedules
+
+The named presets are L1 opt-in candidates. `schedule_preset=karras` generates
+a Karras-style monotonic sigma path for the existing FlowMatch Euler update
+rule. `schedule_preset=ays` generates an AYS-anchor sigma path and interpolates
+the anchor curve when `num_inference_steps` is not 10. Neither preset is enabled
+by default, neither changes the 10-step baseline, and neither should be
+reported as success-rate parity evidence without the later SuperPod acceptance
+run.
 
 Deferred until experiments justify them:
 
 - alternate timestep spacing
-- Karras-like or AYS-like schedules
 - DPM-Solver++ / UniPC adapters
 
 ## Coarse-To-Fine SuperPod Search
@@ -90,6 +98,12 @@ wam eval fastwam-libero --opt scheduler --set task_id=0 --set num_trials=1 \
 
 wam eval fastwam-robotwin --opt scheduler --set task_name=click_alarmclock \
   --set num_episodes=1 --set num_inference_steps=6 --set sigma_shift=3.0
+
+wam eval fastwam-libero --opt scheduler --set task_id=0 --set num_trials=1 \
+  --set schedule_preset=karras
+
+wam eval fastwam-libero --opt scheduler --set task_id=0 --set num_trials=1 \
+  --set schedule_preset=ays
 ```
 
 Portable coarse-sweep command generation inside a prepared SuperPod allocation:

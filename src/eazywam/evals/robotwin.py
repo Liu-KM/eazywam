@@ -614,6 +614,7 @@ def _runtime_options(context: _EvalContext) -> dict[str, object]:
         "num_inference_steps",
         "scheduler_name",
         "schedule_type",
+        "schedule_preset",
         "timesteps",
         "sigmas",
         "dit_cache_mode",
