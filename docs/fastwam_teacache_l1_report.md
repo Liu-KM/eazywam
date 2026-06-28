@@ -12,6 +12,8 @@ maintainer-approved GPU/simulator environment.
 - Family: `feature_cache`
 - Default: disabled
 - Scope: FastWAM action-only inference, request-local cache, `dit_cache_mode=video_kv`
+- Product path: single-request FastWAM inference acceleration only; batch
+  serving is deferred and is not evaluated by this report.
 - Exclusions: no CUDA Graph default combination, no PAB, no FasterCache, no
   token pruning, no cross-replan cache, no native/reference parity claim.
 - Evidence root:

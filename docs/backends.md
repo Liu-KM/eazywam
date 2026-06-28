@@ -387,10 +387,11 @@ Report `metric_comparisons["latency_ms.mean"].speedup`,
 `backend_metadata.teacache_drift_score`, `eval_metrics.success_rate`, action
 drift from `output_gate_details`, and any non-null
 `backend_metadata_values.teacache_fallback_reason`. A fallback value such as
-`requires_video_kv_cache`, `batch_unsupported`, or `teacache_hook_unavailable`
-means the TeaCache speedup claim is unsupported for that run. Do not claim
-parity or speedup until SuperPod traces and simulator result files support those
-numbers.
+`requires_video_kv_cache` or `teacache_hook_unavailable` means the TeaCache
+speedup claim is unsupported for that run. Batch serving is deferred, so any
+batch-specific TeaCache fallback from an older prototype is a historical runtime
+detail rather than a current product contract. Do not claim parity or speedup
+until SuperPod traces and simulator result files support those numbers.
 Use `docs/fastwam_teacache_l1_report.md` as the versioned report template for
 the required LIBERO and RoboTwin evidence.
 

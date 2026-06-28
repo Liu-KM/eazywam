@@ -9,6 +9,13 @@ This page is a contract document. It does not imply that every listed profile
 has a working implementation. Model manifests and runtime traces decide what is
 supported, enabled, applied, measured, or still experimental.
 
+The current implementation focus is single-request FastWAM inference
+acceleration: `dit_cache(video_kv)`, `cuda_graph(auto)`, the opt-in `scheduler`
+profile, TeaCache L1 as an opt-in approximate cache, and experimental opt-in
+`torch_compile`. Deferred batch serving is outside the current product path;
+this document does not define a batch-inference API or a new batch runner
+commitment.
+
 ## Profile Card Shape
 
 Every profile should be documented with this shape before implementation:
@@ -41,7 +48,7 @@ Field meanings:
 | `conflicts` | Profiles or runtime modes that cannot be enabled together. |
 | `trace_fields` | Required trace or backend metadata fields. |
 | `output_check` | How behavior is compared with the profile disabled. |
-| `status` | `implemented`, `measured`, `partial`, `planned`, `experimental`, or `unsupported`. |
+| `status` | `implemented`, `measured`, `partial`, `planned`, `deferred`, `experimental`, or `unsupported`. |
 
 ## Profile Families
 
@@ -55,7 +62,7 @@ Field meanings:
 | `native_cache` | Use model-native request-local caches. | FastWAM `dit_cache` / `video_kv`. |
 | `feature_cache` | Reuse or approximate intermediate DiT features. | `teacache`, PAB, FasterCache. |
 | `graph_compile` | Reduce Python/kernel launch overhead with graph or compile paths. | `cuda_graph`, `torch_compile`. |
-| `batch_serving` | Improve throughput by grouping eval or serve requests. | eval sharding, dynamic batch serving, batched action denoise. |
+| `batch_serving` | Deferred throughput/serving family; not in the current product path. | Deferred eval sharding, dynamic batch serving, batched action denoise. |
 
 ## Standard Profile Specs
 
@@ -323,9 +330,10 @@ request-local, action-only, and only applies on the FastWAM `dit_cache`
 `video_kv` path. It is implemented as a step-output cache around action denoise
 steps, not as layer-level TeaCache. It must remain separate from `dit_cache`,
 and measurements must report action drift and simulator success rate rather than
-claiming native/reference parity. FastWAM batch inference disables TeaCache for
-L1 and records `teacache_fallback_reason=batch_unsupported` when the profile or
-runtime option requested it.
+claiming native/reference parity. The current TeaCache L1 product path is
+single-request only. Deferred batch serving for TeaCache stays with the rest of
+the throughput/serving work; current profile docs should not imply an active
+batch-inference path or batch-specific fallback contract.
 
 ### `cuda_graph`
 
@@ -343,7 +351,7 @@ requires:
   backend_capabilities: [static_action_body_capture]
   profiles: [dit_cache]
 conflicts:
-  - dynamic_batch_serving
+  - deferred_batch_serving
 trace_fields:
   - cuda_graph_enabled
   - cuda_graph_mode
@@ -386,7 +394,11 @@ status: experimental
 `torch_compile` stays opt-in. FastWAM evidence shows that compile overhead and
 Inductor fallback can make first-request latency worse than CUDA Graph alone.
 
-### `batch_serving`
+### `batch_serving` (deferred record)
+
+This deferred record preserves the old throughput idea for future design only.
+It is a deferred note, not a current implementation spec, and does not define
+a batch-inference API or a batch runner.
 
 ```yaml
 name: batch_serving
@@ -395,28 +407,23 @@ class: runtime_system
 default: disabled
 scope: server
 parameters:
-  max_batch_size: null
-  max_wait_ms: null
-  fallback_to_single: true
+  design_status: deferred
+  implementation_commitment: none
 requires:
-  backend_capabilities: [batched_infer]
+  backend_capabilities: []
 conflicts:
-  - cuda_graph_dynamic_shapes
-trace_fields:
-  - batch_id
-  - batch_size
-  - queue_wait_ms
-  - dispatch_ms
-  - per_request_model_ms
-  - batch_fallback_reason
-output_check: per_request_action_shape_and_success_rate
+  - current_single_request_mainline
+trace_fields: []
+output_check: fresh_design_required
 status: deferred
 ```
 
-Batch serving is deferred. The first prototype was removed from the product
-path because it mixed serving, eval orchestration, and backend batching too
-early. Revisit this profile after the single-request acceleration path is
-stable, with a cleaner serving contract and fresh validation.
+Deferred status: batch serving is deferred. The first prototype was removed from
+the product path because it mixed serving, eval orchestration, and backend
+batching too early. Revisit this profile after the single-request acceleration
+path is stable, with a cleaner serving contract and fresh validation. Until
+then, `batch_serving` is documentation of a deferred topic, not a profile users
+should expect to enable.
 
 ## Experimental Methods Not In The Default Path
 
