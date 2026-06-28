@@ -398,7 +398,7 @@ Required tracked bookkeeping:
 - `report_root`: directory containing tables, compare JSON, and bundle JSON.
 - `job_id`: site scheduler or allocation id, recorded as data only.
 - `commands`: exact `wam eval` and `wam compare` commands.
-- `environment`: GPU type, container or uv runtime label, EazyWAM commit, and
+- `environment`: GPU type, container or uv runtime label, EasyWAM commit, and
   FastWAM vendored commit.
 
 Local-only bookkeeping that must not become public contract:
