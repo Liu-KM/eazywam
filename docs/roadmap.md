@@ -183,6 +183,11 @@ a new batch runner, batch-inference API, or serving implementation.
 
 This phase is complete when a user can enable the trick with a small profile or
 CLI flag and the telemetry layer can report latency, memory, and output drift.
+Moving a FastWAM scheduler, TeaCache, or later approximate acceleration profile
+from opt-in evidence to stronger recommendation or default status also requires
+the full-task or representative-task gates in
+`docs/fastwam_full_task_evidence_plan.md`; current single-task scheduler and
+TeaCache evidence is not a default-enable basis.
 
 Expected deployment target: any supported GPU environment with the backend's
 required runtime environment and mounted cache/run directories.
