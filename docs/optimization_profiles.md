@@ -16,6 +16,13 @@ profile, TeaCache L1 as an opt-in approximate cache, and experimental opt-in
 this document does not define a batch-inference API or a new batch runner
 commitment.
 
+Rollout evidence is tracked separately from implementation status. Before a
+FastWAM scheduler, TeaCache, or future approximate acceleration profile moves
+from opt-in experimental use to `recommended_candidate`, `parity_verified`, or
+`default_enabled`, it must satisfy the full-task or representative-task gates in
+`docs/fastwam_full_task_evidence_plan.md`. Existing single-task scheduler and
+TeaCache evidence must not be used as a default-enable claim.
+
 ## Profile Card Shape
 
 Every profile should be documented with this shape before implementation:
