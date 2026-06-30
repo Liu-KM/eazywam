@@ -12,7 +12,9 @@ supported, enabled, applied, measured, or still experimental.
 See `docs/acceleration_methods.md` for the public acceleration method catalog,
 method status labels, and minimum measured evidence standard. A method is the
 backend-integrated implementation; a profile is the EazyWAM control and
-validation contract for enabling and comparing that method.
+validation contract for enabling and comparing that method. Use
+`docs/acceleration_validation_runbook.md` for the standard Acceptance
+Validation, Measured Validation, and evidence-template workflow.
 
 The current implementation focus is single-request FastWAM inference
 acceleration: `dit_cache(video_kv)`, `cuda_graph(auto)`, the opt-in `scheduler`

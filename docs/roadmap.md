@@ -202,6 +202,9 @@ the full-task or representative-task gates in
 `docs/fastwam_full_task_evidence_plan.md`; current single-task scheduler and
 TeaCache evidence is not a default-enable basis.
 
+The public runbook for deciding Acceptance Validation, Measured Validation, and
+evidence publication is `docs/acceleration_validation_runbook.md`.
+
 Expected deployment target: any supported GPU environment with the backend's
 required runtime environment and mounted cache/run directories.
 

@@ -97,6 +97,11 @@ This is the product observability path:
 5. Publish known speed, memory, compatibility, and output-drift notes in the
    support matrix.
 
+The public acceleration validation loop is documented in
+`docs/acceleration_validation_runbook.md`. It separates Acceptance Validation
+from Measured Validation and keeps private maintainer runtime operations outside
+the product contract.
+
 `wam compare` is a trust tool, not a marketing badge. It only reports
 `faster`/`slower` when both traces have comparable action shapes and usable
 latency samples; missing output gates are `not_comparable`.

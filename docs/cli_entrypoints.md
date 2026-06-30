@@ -118,6 +118,10 @@ The wrapper saves the report as
 files and reports a JSON summary. A path may point directly to `trace.jsonl` or
 to a run directory containing that file.
 
+For the standard public acceleration validation loop that combines `wam run`,
+`wam eval`, and `wam compare`, see
+`docs/acceleration_validation_runbook.md`.
+
 Current comparison is intentionally conservative:
 
 - primary metric: mean latency from `inference_end`, `serve_request_end`, or

@@ -59,6 +59,10 @@ Observed latency gains without a passing output gate, success metric, or
 trace-visible profile metadata may be recorded as audit data, but not promoted
 as `measured`.
 
+Use `docs/acceleration_validation_runbook.md` for the public Acceptance
+Validation and Measured Validation loop, the Evidence Summary template, and the
+Evidence Bundle v0.1 example.
+
 ## Current Catalog
 
 | Method | Profile family | Enablement | Applicability | Status | Evidence and notes |
@@ -91,6 +95,8 @@ Make unsupported combinations explicit rather than silently omitting them:
 
 ## References
 
+- `docs/acceleration_validation_runbook.md` - public validation loop and
+  evidence templates.
 - `docs/optimization_profiles.md` - profile-card fields and families.
 - `docs/trace_schema.md` - profile status events and backend metadata.
 - `docs/cli_entrypoints.md` - `--opt` on run, eval, and serve.
