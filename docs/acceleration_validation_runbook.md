@@ -197,6 +197,15 @@ runtime contract, or required exact-output gates, keep the method
 Use this short form first so reviewers can understand the claim before reading
 the JSON bundle.
 
+The Evidence Summary and Evidence Bundle have different jobs. The summary is a
+human review layer: it states the status decision, scope, evidence, and caveats
+in a form a maintainer can read quickly. The bundle is the machine-validation
+layer: it carries structured fields, commands, trace references, profile status,
+and privacy notes so future tools can check consistency. A future validator
+should check the bundle. It may warn when the summary is missing or contradicts
+the bundle, but it should not require humans to encode every judgment as prose
+before the structured evidence is valid.
+
 ```markdown
 ## Evidence Summary
 
@@ -330,6 +339,181 @@ When Measured Validation fails, keep the same bundle shape but set
 `measured_validation.passed` to `false`, explain the blocker, and choose
 `experimental`, `implemented`, or `unsupported` as the status decision.
 
+## Future `wam evidence validate` Design
+
+`wam evidence validate` is a future automation target, not part of this
+runbook's current implementation. It should be added only after the Evidence
+Bundle templates have real examples for measured, experimental, and unsupported
+outcomes, because those examples will make the schema less speculative.
+
+### What The Validator Should Check
+
+The validator should read one public-safe Evidence Bundle JSON file and,
+optionally, the current acceleration catalog at
+`docs/acceleration_methods.md`. It should validate the public contract around
+the evidence, not rerun the workload.
+
+For every bundle, it should require:
+
+- `schema_version` and `evidence_id`.
+- `summary.status_decision`, `summary.scope`, `summary.method_profile`, and
+  caveats or non-generalization notes.
+- `method.name`, `method.profile_family`, `method.status_before`, and
+  `method.status_decision`.
+- `scope.mode` plus either single-target scope fields such as
+  `scope.model_id`, `scope.workload`, `scope.seed`, `scope.trial_count`, and
+  `scope.task_scope`, or a `scope.model_targets[]` list with those fields per
+  target.
+- `runtime_context.hardware_class`, `accelerator_count`, `device`, `dtype`,
+  `runtime_kind`, and `eazywam_commit`.
+- baseline, variant, and compare commands when a measured result is claimed.
+  Single-target bundles may use `commands.baseline`, `commands.variant`, and
+  `commands.compare`; multi-target bundles may use arrays such as
+  `commands.baseline_examples`, `commands.variant_examples`, and
+  `commands.compare_examples`.
+- `profile_status.requested`, `profile_status.applied`,
+  `profile_status.fallback`, `profile_status.fallback_reason`, and profile
+  parameters.
+- `acceptance_validation.passed`, profile trace visibility, action contract
+  status, task-quality status, and notes.
+- `output_drift.available`, `output_drift.hard_gate`, `output_drift.passed`,
+  and an output-drift summary when comparable.
+- `artifacts` pointing to public-safe trace summaries, eval summaries, compare
+  output, or reports.
+- `privacy.public_safe`, `privacy.redactions`, and
+  `privacy.excluded_private_details`.
+
+For `measured` decisions, it should additionally require:
+
+- `acceptance_validation.passed=true`.
+- `measured_validation.passed=true`.
+- a primary latency or memory metric with baseline value, variant value,
+  relative change, and speedup or memory delta. Multi-target bundles may report
+  these fields per target in a results list.
+- a task-quality gate with baseline, variant, and pass/fail status when the
+  workload has task quality metrics.
+- no hidden fallback for the measured profile, unless the evidence explicitly
+  claims the fallback behavior itself rather than the acceleration method.
+- passing output-drift status when the method declares exact-output
+  preservation or when a hard drift gate is configured.
+
+For `experimental`, `implemented`, or `unsupported` decisions, it should require
+the blocker or unsupported combination to be explicit. Speedup-like metric
+values may appear in the bundle, but they are not reportable unless the
+measured fields above pass.
+
+### What The Validator Should Not Check
+
+The validator should not:
+
+- execute `wam run`, `wam eval`, `wam serve`, or `wam compare`.
+- inspect raw private logs or require SuperPod access.
+- decide whether a new acceleration method is scientifically valuable.
+- infer task quality from raw images, videos, simulator logs, or backend-native
+  tensors.
+- parse backend-native cache names, tensor layouts, scheduler internals, or
+  transport protocols beyond the documented trace and profile fields.
+- hard-code FastWAM, Cosmos-Policy, DreamZero, or other upstream repository
+  behavior into the core validation rules.
+- auto-update `docs/acceleration_methods.md`.
+- promote a method to `measured` when the catalog status meanings would need to
+  change first.
+
+### Privacy Checks
+
+Public evidence must be safe to commit. The validator should treat
+`privacy.public_safe=false` as a blocking error, then scan structured text
+fields, commands, artifact references, and summary notes for private runtime
+details.
+
+Blocking privacy findings include:
+
+- scheduler submission files, sbatch files, private launcher scripts, or site
+  recovery scripts.
+- account names, partitions, reservations, queues, login hosts, usernames, or
+  maintainer-only job ids.
+- private scratch paths, home directories, cluster mount names, raw log paths,
+  or paths containing credentials or access tokens.
+- pasted raw cluster logs, environment dumps, SSH commands, or credential-like
+  strings.
+- SuperPod operational instructions or SuperPod-specific launch mechanics.
+
+Generic runtime context is allowed when it is not operational: hardware class,
+accelerator count, dtype, runtime kind, EazyWAM commit, and standard `wam`
+commands. A private maintainer runtime name such as SuperPod should be allowed
+only as scoped evidence context when needed, never as a required user platform,
+command wrapper, account, partition, scratch path, or recovery procedure.
+
+### Catalog Consistency Checks
+
+When the catalog is supplied, the validator should compare the bundle against
+`docs/acceleration_methods.md` without editing it.
+
+It should check that:
+
+- the method row exists or the output reports `catalog_update_needed`.
+- the catalog profile family matches `method.profile_family`.
+- the catalog enablement path agrees with the bundle's public command surface,
+  such as `--opt <method>` or a documented equivalent.
+- the catalog status is one of `planned`, `implemented`, `experimental`,
+  `measured`, or `unsupported`.
+- a catalog `measured` claim is scoped and has a matching measured bundle or
+  linked public-safe evidence.
+- a bundle `measured` decision is not reflected as only `implemented` or
+  `experimental` without a reported catalog action.
+- a bundle with failed measured validation, hidden fallback, failed quality
+  gate, invalid output gate, or missing compare evidence does not support a
+  catalog `measured` claim.
+- unsupported model, backend, workload, device, runtime path, or profile
+  combinations are recorded either in the method row or in the Unsupported
+  Combinations section.
+
+Catalog mismatches should be reported as actions or blockers. A missing catalog
+update after new valid evidence is an action. A catalog row that overclaims
+`measured` despite failed or missing evidence is a blocker.
+
+### Validator Output
+
+The command should print a concise human report and optionally emit JSON for CI
+or agent use. The structured output should include:
+
+```json
+{
+  "ok": false,
+  "evidence_id": "fastwam-libero-teacache-l1-2026-06-30",
+  "status_decision": "experimental",
+  "reportable_speedup": false,
+  "issues": [
+    {
+      "severity": "blocker",
+      "code": "non_reportable_speedup",
+      "path": "/measured_validation",
+      "message": "Speedup-like latency is present, but the output gate failed.",
+      "fix": "Keep status experimental or rerun measured validation with a passing quality/output gate."
+    }
+  ],
+  "catalog_actions": [],
+  "privacy_findings": []
+}
+```
+
+Use issue codes that are stable enough for agents:
+
+- `missing_field` for absent required JSON fields, with a JSON pointer path.
+- `privacy_blocker` for public/private boundary violations.
+- `acceptance_blocked` when acceptance fields fail or are incomplete.
+- `measured_blocked` when measured validation is incomplete.
+- `unsupported_combination` when the bundle records a known unsupported scope.
+- `non_reportable_speedup` when speedup-like metrics exist but cannot support a
+  `measured` status.
+- `catalog_update_needed` when valid evidence changes public expectations.
+- `catalog_overclaims` when the catalog claims more than the evidence supports.
+
+The report should distinguish missing data from failed data. A missing field is
+an evidence-shape problem. A failed quality gate, fallback, unsupported
+combination, or non-reportable speedup is a validation result that may still be
+useful evidence for `experimental` or `unsupported` status.
+
 ## Updating The Acceleration Catalog
 
 Every accepted evidence record should update
@@ -352,7 +536,7 @@ If the evidence would require changing status meanings, public command behavior,
 or the SuperPod public/private boundary, record the concern and do not update
 the method to `measured` until the product decision is made.
 
-## `wam serve` Follow-Up Track
+## `wam serve --opt` Follow-Up Track
 
 Serving validation is required, but it has a different risk shape than the first
 `run`/`eval`/`compare` path. A resident server has startup, warmup, health,
@@ -360,17 +544,53 @@ steady-state request latency, request failures, batching, shape changes,
 long-running stability, and cleanup behavior that a single `wam run` or
 simulator `wam eval` does not cover.
 
-The follow-up serving track should define:
+The future serving validation issue should define a public `wam serve --opt`
+validation path with the same Evidence Summary and Evidence Bundle layers used
+above. The bundle's `scope.mode` should be `serve`, and baseline and variant
+servers should use the same model id, prepared assets, runtime context, request
+payload sequence, warmup request count, measured request count, timeout policy,
+and cleanup policy unless the evidence explicitly records a difference.
 
-- startup and warmup evidence from `serve_start`, `serve_ready`, and
-  `backend_close`.
+The serving track should cover:
+
+- resident startup and warmup evidence from `serve_start`, `runtime_contract`,
+  `preflight`, `backend_load`, `backend_warmup`, `reset`, and `serve_ready`.
+- cleanup evidence from `backend_close`, including startup failures and
+  interrupted validation runs.
+- health evidence from `/health` before and after measured request sequences,
+  including run id, runtime info, and trace path.
 - request-latency evidence from repeated `/infer` calls and
-  `serve_request_end`.
-- health-check and error behavior.
-- long-running stability and memory behavior.
-- batching and dynamic-shape behavior when a backend declares support.
-- profile fallback rules for server-scoped methods such as batch serving or
-  CUDA Graph under changing request shapes.
+  `serve_request_end`, with warmup requests separated from measured requests.
+- request quality evidence from action contract status, action shape, warnings,
+  and task-quality gates when a serve path is driven by an eval client.
+- request failure behavior for bad payloads, timeouts, and backend errors,
+  including `error` events and failed `serve_request_end` records.
+- long-running stability evidence with request count or duration, memory
+  samples, failure count, and cleanup status.
+- batching and dynamic-shape behavior only when a backend declares support,
+  including same-shape batches, mixed-shape requests, queueing limits, and
+  per-request action contract results.
+- profile fallback rules for server-scoped methods such as `batch_serving`,
+  `cuda_graph`, or `torch_compile` under changing request shapes.
+
+A serving acceptance result should prove that the optimized server starts,
+warms up, becomes healthy, handles at least one valid observation request,
+emits trace-visible profile status, preserves the action/result contract, and
+closes cleanly. A serving measured result should add a scoped baseline-to-variant
+comparison for request latency, throughput, memory, or startup/warmup time with
+the same quality and fallback gates required by this runbook.
+
+The serving track should report latency and throughput separately. A batching
+method may improve throughput while increasing single-request latency; that is
+not a contradiction, but the Evidence Summary must name the metric being
+claimed. Dynamic-shape or batching fallbacks must remain trace-visible and must
+make a speedup non-reportable for any request shape where the profile did not
+apply.
+
+Serving validation should not add cluster scheduler behavior, public endpoint
+exposure, external load balancers, multi-GPU scheduling policy, or private
+maintainer launch mechanics to the core contract. Those remain environment
+responsibilities around the standard `wam serve` command.
 
 Until that track exists, do not use `wam serve` evidence alone to promote a
 method to `measured` for non-serving paths, and do not use `run` or `eval`
