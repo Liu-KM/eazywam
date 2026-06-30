@@ -80,6 +80,36 @@ status, and documented measurement results; it is a platform capability, not
 part of any one acceleration method's source implementation.
 _Avoid_: Method implementation
 
+**Acceleration Validation Loop**:
+The public EazyWAM workflow for proving the status of an acceleration method:
+declare a baseline, run a variant through `--opt` or an equivalent profile,
+record traces and summaries, compare outputs and runtime metrics, check eval
+quality when relevant, record fallback status, and publish scoped evidence.
+Maintainers may execute this loop on the SuperPod Maintainer Runtime during
+development, but the loop must be expressible for any prepared GPU runtime and
+must not depend on SuperPod-specific launch mechanics. The first public runbook
+should focus on `wam run`, `wam eval`, and `wam compare`; `wam serve`
+acceleration validation is a required follow-up track for resident runtime,
+warmup, request-latency, health, long-running stability, and batching behavior.
+_Avoid_: SuperPod-only benchmark flow
+
+**Acceptance Validation**:
+The first validation level for an acceleration method. It proves that the method
+is selectable, trace-visible, contract-compatible, and able to complete at least
+one relevant small workload without obvious task-quality failure. Acceptance
+validation can be produced by the same run that later supports measured
+validation, but it answers "is this method usable?" rather than "is this a
+reportable speedup?"
+_Avoid_: Speedup proof
+
+**Measured Validation**:
+The second validation level for an acceleration method. It proves a scoped
+speedup or memory improvement by comparing a clear baseline and variant under a
+declared model, workload, runtime, seed/trial scope, fallback policy, task
+quality gate, and reportable performance metric. Only measured validation can
+promote an acceleration method to scoped `measured` status.
+_Avoid_: Smoke test, anecdotal benchmark
+
 **Public Command Surface**:
 The stable user-facing command set: `wam list`, `wam info <model-id>`,
 `wam doctor <model-id>`, `wam prepare <model-id>`, `wam run <model-id>`,
@@ -187,15 +217,61 @@ The lifecycle label for an acceleration method on a model or backend:
 `planned`, `implemented`, `experimental`, `measured`, or `unsupported`. Only
 `measured` methods should be promoted as proven speedups; implemented or
 experimental methods may be documented as available or testable, not proven.
+Passing acceptance validation usually promotes a method to `experimental`, not
+`measured`; `measured` requires measured validation in a declared scope.
 _Avoid_: Marketing unmeasured speedups
 
 **Measured Method Evidence**:
 The minimum evidence required before an acceleration method is labeled
 `measured` for a model entry: model and workload, baseline command, variant
 command, trace path or trace summary, latency or memory comparison, action shape
-gate, simulator success or episode metrics when relevant, fallback status, and
-hardware/runtime environment.
+gate, output drift summary when comparable, simulator success or episode metrics
+when relevant, fallback status, and hardware/runtime environment. Output drift
+is an audit signal by default; task quality is the primary gate for simulator
+workloads unless a method explicitly claims exact output preservation.
 _Avoid_: Anecdotal speedup claim
+
+**Public Evidence Summary**:
+The open-source-safe evidence record for a model validation or acceleration
+method result. It includes the scoped status conclusion, model, workload, seed,
+trial count, hardware class, dtype, runtime, baseline command, variant command,
+trace/report summary, compare summary, output drift summary when comparable,
+fallback status, task-quality result when relevant, and the reason a method is
+or is not reportable as `measured`. It excludes private scheduler wrappers,
+accounts, partitions, login details, scratch paths, raw logs, credentials, and
+site recovery scripts. Public validation runbooks should describe generic GPU
+runtime requirements and standard `wam` commands rather than naming private
+maintainer platforms; a private platform may appear only as scoped evidence
+context when relevant.
+_Avoid_: Raw cluster log dump, private SuperPod runbook
+
+**Evidence Summary**:
+The short human-readable review layer for an acceleration or model-validation
+result. It states the status decision, scope, baseline, variant, task quality,
+performance result, profile/fallback status, output-drift audit result when
+available, and caveats in a form a maintainer can review quickly. It should not
+force humans to read a large machine JSON object before understanding the
+claim.
+_Avoid_: Machine-only evidence dump
+
+**Evidence Bundle**:
+The complete machine-readable evidence package used by agents, tools, CI, and
+future maintainers. It contains the Evidence Summary plus structured JSON,
+compare output, trace or trace-summary references, commands, runtime context,
+profile status, acceptance validation, measured validation, blockers, and
+privacy/redaction notes. The bundle is intentionally more detailed than the
+human summary so status decisions can be validated automatically later.
+_Avoid_: Unstructured benchmark notes
+
+**SuperPod Maintainer Runtime**:
+The private maintainer GPU/simulator environment used by EazyWAM maintainers to
+produce real acceleration and model-validation evidence. SuperPod can appear in
+evidence records as hardware/runtime context, but it is not a public EazyWAM
+deployment interface, not an open-source user requirement, and not part of the
+core command contract. SuperPod operational knowledge such as sbatch files,
+accounts, partitions, scratch paths, recovery scripts, and login workflows
+should stay in untracked local maintainer notes, not public repository docs.
+_Avoid_: Public deployment target, required user platform
 
 **Acceleration Method Developer Guide**:
 A core open-source deliverable that explains how to add a new acceleration
