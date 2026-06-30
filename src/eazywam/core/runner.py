@@ -251,6 +251,6 @@ def _run_input_required_message(model_id: str) -> str:
         f"{model_id} needs an observation input for `wam run`.\n"
         "Try:\n"
         f"  wam run {model_id} --input obs.json --output action.json\n"
-        f"  wam eval {model_id} --workload libero-single-task --task-id 0 --num-trials 1\n"
+        f"  wam eval {model_id}\n"
         f"  wam serve {model_id}"
     )

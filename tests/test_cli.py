@@ -326,7 +326,8 @@ def test_cli_run_real_wam_without_input_prints_next_steps(capsys) -> None:
     assert exit_code == 2
     assert "needs an observation input" in captured.err
     assert "wam run fastwam-libero --input obs.json --output action.json" in captured.err
-    assert "wam eval fastwam-libero --workload libero-single-task" in captured.err
+    assert "wam eval fastwam-libero" in captured.err
+    assert "libero-single-task" not in captured.err
     assert "wam serve fastwam-libero" in captured.err
     assert "Traceback" not in captured.err
 

@@ -1,8 +1,16 @@
 # Roadmap
 
-The project direction is WAM deployment first: build the smallest Ollama-like
-spine that can run and serve a model in a portable runtime, then add measured
-acceleration profiles.
+EazyWAM is a systems-level deployment and acceleration harness for WAM/VLA
+inference. The roadmap is depth-first: make one real WAM deeply complete across
+prepare, run, serve, eval, trace, compare, and acceleration controls; then use a
+second model or task family to test generality; then expand the model library
+and acceleration method catalog.
+
+The model library and acceleration method catalog are separate public surfaces.
+The model library tracks curated WAM model entries and maturity. The
+acceleration method catalog tracks backend-integrated methods, optimization
+profiles, compatibility, rollout status, and validation evidence. Only
+`measured` methods should be described as proven speedups.
 
 ## Phase 0: Direction And Contract
 
@@ -109,9 +117,10 @@ External laptop-to-node endpoint access is not a Phase B requirement. The first
 serving target is operational serving inside the environment that launched the
 backend runtime.
 
-## Phase E: First Native Real Model Evaluation
+## Phase E: First Deep Real WAM Exemplar
 
-Goal: make one real curated WAM run through the public path.
+Goal: make `fastwam-libero` the first deep exemplar for the public path without
+turning it into privileged architecture.
 
 - `fastwam-libero` model entry.
 - Asset prepare plan for checkpoint, dataset stats, and required model files.
@@ -122,6 +131,8 @@ Goal: make one real curated WAM run through the public path.
 - First LIBERO single-task simulator evaluation through
   `wam eval fastwam-libero --workload libero-single-task`.
 - First full LIBERO manager evaluation on top of the native eval loop.
+- Reusable tutorial and checklist in `docs/fastwam_libero_deep_exemplar.md`
+  for future model entries to copy at the product-contract level.
 
 This phase is complete when `wam prepare fastwam-libero` can prepare or locate
 released assets, `wam run fastwam-libero --input obs.json` can emit actions
@@ -149,9 +160,10 @@ and either container support or a compatible self-managed backend environment.
 A lab cluster can be used for validation, but cluster submission mechanics are
 not part of the harness contract.
 
-## Phase F: First Real Optimization Trick
+## Phase F: First Real Acceleration Method
 
-Goal: show that a real acceleration method can be enabled as a profile.
+Goal: show that a real acceleration method can be enabled, traced, compared,
+and measured as an optimization profile.
 
 Current product work is the single-request FastWAM inference acceleration path:
 `dit_cache(video_kv)`, `cuda_graph(auto)`, the opt-in `scheduler` profile,
@@ -181,8 +193,9 @@ a new batch runner, batch-inference API, or serving implementation.
 - Trace fields for cache hit/update timing, latency, memory, and output checks.
 - `wam compare` output for the two recorded runs.
 
-This phase is complete when a user can enable the trick with a small profile or
-CLI flag and the telemetry layer can report latency, memory, and output drift.
+This phase is complete when a user can enable the method with `--opt <method>`
+or a small profile and the telemetry layer can report latency, memory, output
+drift, and validation status.
 Moving a FastWAM scheduler, TeaCache, or later approximate acceleration profile
 from opt-in evidence to stronger recommendation or default status also requires
 the full-task or representative-task gates in
@@ -194,7 +207,7 @@ required runtime environment and mounted cache/run directories.
 
 ## Phase F2: Acceleration Profile Contract
 
-Goal: make acceleration work composable before adding more tricks.
+Goal: make acceleration work composable before adding more methods.
 
 - Keep `docs/optimization_profiles.md` as the canonical profile-card contract.
 - Classify every acceleration method by family: action runtime, output control,
@@ -216,12 +229,14 @@ upstream repository first.
 - Model support matrix.
 - Known gaps and hardware requirements per model entry.
 - Quickstarts for open-loop and simulator paths.
+- Explicit links from each model entry to supported, unsupported, experimental,
+  and measured acceleration profiles in the acceleration method catalog.
 - MIT license selected before public release.
 
-## Acceleration Tracks
+## Acceleration Method Catalog Tracks
 
 After the product spine works, optimization work should proceed through these
-tracks:
+catalog tracks:
 
 | Track | Techniques | Rollout status |
 |---|---|---|

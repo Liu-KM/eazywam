@@ -10,9 +10,15 @@
 
 # EazyWAM
 
-EazyWAM is a deployment and acceleration harness for world-action models. It
-turns scattered WAM checkpoints, runtimes, assets, eval scripts, serving paths,
-optimization toggles, and traces into one model-centric `wam` workflow.
+EazyWAM is a systems-level deployment and acceleration harness for WAM/VLA
+inference. It turns scattered world-action model checkpoints, runtimes, assets,
+eval scripts, serving paths, acceleration methods, and traces into one
+model-centric `wam` workflow.
+
+The project is aimed first at WAM systems and acceleration researchers, while
+keeping the command experience simple for model runners. EazyWAM is not a
+benchmark wrapper, training framework, simulator framework, or attempt to make
+every WAM share one internal model architecture.
 
 ## Quickstart
 
@@ -107,6 +113,15 @@ wam eval fastwam-libero \
   --cache-dir /path/to/wam-cache
 ```
 
+### Run A Reference Eval
+
+Reference evals call upstream official scripts for parity or debugging. They
+are explicit and are not the default product eval path.
+
+```bash
+wam eval fastwam-libero --reference --upstream-dir /path/to/FastWAM
+```
+
 ### Evaluate FastWAM In RoboTwin
 
 Run this inside a prepared FastWAM + RoboTwin runtime.
@@ -140,11 +155,17 @@ model-library entry.
 | `cosmos-policy-libero` | [![GitHub](https://img.shields.io/badge/GitHub-Cosmos--Policy-181717?logo=github)](https://github.com/NVlabs/cosmos-policy) [![Hugging Face](https://img.shields.io/badge/HF-Cosmos--Policy--LIBERO-FFD21E?logo=huggingface)](https://huggingface.co/nvidia/Cosmos-Policy-LIBERO-Predict2-2B) | `wam info cosmos-policy-libero` | Native smoke and official-script parity integration started. |
 | `dreamzero-droid-sim` | [![GitHub](https://img.shields.io/badge/GitHub-DreamZero-181717?logo=github)](https://github.com/dreamzero0/dreamzero) [![Hugging Face](https://img.shields.io/badge/HF-DreamZero--DROID-FFD21E?logo=huggingface)](https://huggingface.co/GEAR-Dreams/DreamZero-DROID) [![Hugging Face](https://img.shields.io/badge/HF-DROID_sim_assets-FFD21E?logo=huggingface)](https://huggingface.co/owhan/DROID-sim-environments) | `wam info dreamzero-droid-sim` | Resident policy-server path started; DROID sim path requires a heavier multi-GPU runtime. |
 
-## Acceleration Roadmap
+## Acceleration Method Catalog
 
-EazyWAM exposes acceleration as explicit optimization profiles. A profile must
-declare its scope, parameters, trace fields, output checks, and rollout status
-before it becomes a default path. See
+The acceleration method catalog is separate from the model library. It lists
+backend-integrated methods and the optimization profiles that expose them
+through shared controls such as `--opt <method>` on `wam run`, `wam eval`, and
+`wam serve`.
+
+An optimization profile is the EazyWAM control and validation contract for an
+acceleration method. A profile must declare its scope, parameters, trace fields,
+output checks, and rollout status before it becomes a default path. Only
+methods with `measured` evidence should be described as proven speedups. See
 [`docs/optimization_profiles.md`](docs/optimization_profiles.md) for the full
 profile contract.
 
@@ -160,7 +181,7 @@ does not imply a new batch serving runner or batch-inference API.
 | Output control | action-only inference, no future video decode/save, text/goal embedding cache | FastWAM uses action-only native inference and defaults `return_future=false`; text/goal embedding cache is planned. |
 | Scheduler / sampler | `num_inference_steps`, custom timesteps/sigmas, DPM-Solver++, UniPC, AYS, Karras, FlowMatch schedules | FastWAM has an opt-in FlowMatch Euler scheduler profile with SuperPod single-task candidate evidence; cross-backend adapters and alternate solvers remain planned. |
 | Precision and attention | bf16/fp16/fp32, TF32, SDPA, FlashAttention, xFormers, SageAttention | bf16 defaults and PyTorch SDPA are partially supported; explicit backend selectors are planned. SageAttention stays optional. |
-| Native cache and exact runtime | FastWAM `dit_cache` (`video_kv`), CUDA Graph, torch.compile, warmup/preallocation | `dit_cache` and `cuda_graph(auto)` are implemented for FastWAM; CUDA Graph has SuperPod H800 speedup evidence. `torch_compile` is experimental and disabled by default. |
+| Native cache and exact runtime | FastWAM `dit_cache` (`video_kv`), CUDA Graph, torch.compile, warmup/preallocation | `dit_cache` and `cuda_graph(auto)` are implemented for FastWAM; CUDA Graph has measured SuperPod H800 speedup evidence for specific FastWAM runs. `torch_compile` is experimental and disabled by default. |
 | WAM-specific approximate cache | TeaCache, PAB, FasterCache, cross-chunk cache, step skipping | FastWAM TeaCache L1 is implemented as an opt-in approximate action-denoise step-output cache; PAB and FasterCache remain optional benchmark backends, not defaults. |
 | Throughput and serving | eval sharding, batched action denoise, dynamic batch serving, xDiT/multi-GPU | Deferred. The first batch-serving prototype was removed from the product path; this track should be redesigned after the single-request acceleration path is stable. |
 | Experimental / not default | token merging, AsymRnR, Sparse VideoGen, PTQ methods, FP8 TensorRT | Tracked as research directions only; they need model-specific success-rate evidence before becoming runtime profiles. |
@@ -176,7 +197,11 @@ wam doctor <model-id>
 wam prepare <model-id>
 wam run <model-id> --input obs.json --output action.json
 wam eval <model-id> --workload <workload>
+wam eval <model-id> --reference
 wam serve <model-id>
+wam run <model-id> --input obs.json --opt <method>
+wam eval <model-id> --workload <workload> --opt <method>
+wam serve <model-id> --opt <method>
 wam compare <trace-a> <trace-b>
 ```
 
@@ -194,8 +219,14 @@ uv run ruff check .
 
 - `docs/cli_entrypoints.md` - command behavior.
 - `docs/fastwam_libero_eval_setup.md` - FastWAM setup and eval workflow.
+- `docs/fastwam_libero_deep_exemplar.md` - reusable first deep real-WAM
+  exemplar path.
 - `docs/dependency_isolation.md` - containers and self-managed environments.
 - `docs/wamfile.md` - model entry schema.
+- `docs/acceleration_methods.md` - acceleration method catalog and measured
+  evidence standard.
+- `docs/architecture_boundary_audit.md` - core/backend/processor boundary
+  audit.
 - `docs/optimization_integration.md` - optimization profile design.
 - `docs/optimization_profiles.md` - acceleration profile taxonomy and status.
 - `docs/trace_schema.md` - trace event schema.

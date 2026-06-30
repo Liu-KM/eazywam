@@ -1,17 +1,20 @@
-# Product Direction: Ollama For WAM
+# Product Direction: Systems-Level Deployment And Acceleration Harness
 
-EazyWAM should be the easiest way to try, serve, and optimize WAM/VLA
-inference in a portable runtime environment.
+EazyWAM is a systems-level deployment and acceleration harness for WAM/VLA
+inference. It should make WAMs understandable, runnable, extensible, and
+verifiable across portable backend runtimes.
 
-The target user is a new embodied-AI user or systems builder who wants to run a
-model before becoming an expert in every upstream repository. The project should
-hide setup complexity where possible, while still exposing enough telemetry to
-make optimization toggles inspectable.
+The primary users are WAM systems researchers and acceleration researchers who
+need clear extension points, explicit runtime controls, trustworthy traces, and
+comparable validation results. The secondary user is a model runner who wants to
+discover, prepare, run, eval, or serve a curated WAM before becoming an expert
+in every upstream repository.
 
 ## Positioning
 
-EazyWAM is not just a benchmark wrapper. It should become a local
-deployment layer for WAMs:
+EazyWAM is not a benchmark wrapper, training framework, simulator framework, or
+universal WAM architecture. It should provide an Ollama-like command experience
+for model entries and acceleration profiles:
 
 ```bash
 wam list
@@ -19,8 +22,9 @@ wam info fastwam-libero
 wam doctor fastwam-libero
 wam prepare fastwam-libero
 wam run fastwam-libero --input obs.json --output action.json
-wam run fastwam-libero --input obs.json --opt vla_cache
+wam eval fastwam-libero --workload libero-single-task --opt scheduler --set num_inference_steps=6
 wam serve fastwam-libero
+wam compare runs/baseline runs/variant
 ```
 
 The closest analogy is Ollama, but WAMs are harder than LLMs because a usable WAM
@@ -34,7 +38,30 @@ entry includes more than weights:
 - optional simulator dependencies.
 - backend-specific runtime assumptions.
 
-The project wins if it makes this bundle feel like one curated model entry.
+The project wins if it makes this bundle feel like one curated model entry
+without hiding the backend and validation boundaries that acceleration work
+needs.
+
+## Two Public Catalogs
+
+The model library and acceleration method catalog are different product
+surfaces:
+
+- The model library lists curated WAM model entries, their maturity status,
+  assets, runtime requirements, and known gaps.
+- The acceleration method catalog lists backend-integrated methods, their
+  optimization profiles, enablement controls, compatibility, rollout status,
+  and validation evidence.
+
+`fastwam-libero` is the first deep exemplar because it currently has the most
+complete real WAM path, but it is not privileged architecture. Other model
+entries should eventually reach the same maturity standard where their
+reasonable run, serve, eval, trace, compare, and acceleration capabilities are
+explicit.
+
+Only acceleration methods with `measured` evidence should be promoted as proven
+speedups. Implemented or experimental methods can be documented as available,
+testable, planned, or unsupported, but not as established wins.
 
 The primary heavy-deployment abstraction is the `wam` command inside a prepared
 backend runtime, not a specific cluster. A local container, self-managed virtual
@@ -51,9 +78,11 @@ This is the default user path:
 1. Resolve a model id to a curated model entry.
 2. Prepare or locate model assets.
 3. Load the registered backend and processor.
-4. Run explicit-observation, simulator, or job-local server inference.
+4. Run explicit-observation or resident server inference.
 5. Apply explicit optimization profiles when requested.
-6. Emit runtime info and minimal trace metadata.
+6. Wrap the same backend and processor paths in eval workloads when measuring
+   task success.
+7. Emit runtime info and minimal trace metadata.
 
 The deployment spine optimizes for low friction.
 
@@ -101,16 +130,17 @@ path.
 Start `wam serve fake-open-loop` inside a container or existing job allocation
 and run a job-local inference smoke check.
 
-`C: first real model`
+`C: first deep real WAM exemplar`
 
-Make one curated WAM model run end to end. The recommended first target is
-FastWAM because it already exposes action chunks and released checkpoints.
+Make one curated WAM model run deeply through prepare, run, serve, eval, trace,
+compare, and acceleration controls. The first deep exemplar is
+`fastwam-libero` because it is currently the most mature real WAM path.
 
-`D: first real trick`
+`D: first measured acceleration method`
 
-Make one real inference-time optimization toggleable and measurable. The
-recommended first candidate is VLA-Cache because the upstream code already has a
-clear cache on/off switch.
+Make one backend-integrated acceleration method toggleable, traceable, and
+measurable through an optimization profile. A method can be listed before it is
+measured, but only `measured` methods should be presented as proven speedups.
 
 ## Differentiation
 
@@ -123,6 +153,7 @@ The wedge is:
 - one-command WAM inference deployment.
 - curated defaults for known model/checkpoint/task bundles.
 - explicit, composable inference optimization profiles.
+- a first-class acceleration method catalog alongside the model library.
 - trace-backed telemetry for latency, memory, output drift, and compatibility.
 
 In short: use Hugging Face Hub and upstream repos as sources of assets; provide

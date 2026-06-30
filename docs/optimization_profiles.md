@@ -9,6 +9,11 @@ This page is a contract document. It does not imply that every listed profile
 has a working implementation. Model manifests and runtime traces decide what is
 supported, enabled, applied, measured, or still experimental.
 
+See `docs/acceleration_methods.md` for the public acceleration method catalog,
+method status labels, and minimum measured evidence standard. A method is the
+backend-integrated implementation; a profile is the EazyWAM control and
+validation contract for enabling and comparing that method.
+
 The current implementation focus is single-request FastWAM inference
 acceleration: `dit_cache(video_kv)`, `cuda_graph(auto)`, the opt-in `scheduler`
 profile, TeaCache L1 as an opt-in approximate cache, and experimental opt-in
@@ -55,7 +60,7 @@ Field meanings:
 | `conflicts` | Profiles or runtime modes that cannot be enabled together. |
 | `trace_fields` | Required trace or backend metadata fields. |
 | `output_check` | How behavior is compared with the profile disabled. |
-| `status` | `implemented`, `measured`, `partial`, `planned`, `deferred`, `experimental`, or `unsupported`. |
+| `status` | `planned`, `implemented`, `experimental`, `measured`, `unsupported`, or `deferred` for intentionally parked profile records; method status is scoped by model/workload/runtime evidence. |
 
 ## Profile Families
 
@@ -160,7 +165,7 @@ trace_fields:
   - video_save_enabled
   - future_latent_kept
 output_check: action_shape_and_optional_future_artifacts
-status: partial
+status: implemented
 ```
 
 FastWAM already uses an action-only native inference path and its manifests
@@ -199,7 +204,7 @@ trace_fields:
   - denoise_wall_ms
   - total_ms
 output_check: action_drift_or_success_rate
-status: partial
+status: measured
 ```
 
 Target solvers and schedules include DPM-Solver++, UniPC, AYS, Karras, and
@@ -240,7 +245,7 @@ trace_fields:
   - activation_dtype
   - tf32_enabled
 output_check: action_shape_and_success_rate
-status: partial
+status: implemented
 ```
 
 Manifests already record dtype defaults such as `bf16`. The unified profile
@@ -265,7 +270,7 @@ trace_fields:
   - attention_backend_actual
   - attention_backend_fallback_reason
 output_check: action_drift_or_success_rate
-status: partial
+status: planned
 ```
 
 The first supported values should be `sdpa`, `flash_attn`, and `xformers`.
@@ -329,7 +334,7 @@ trace_fields:
   - teacache_drift_score
   - teacache_fallback_reason
 output_check: action_drift_and_success_rate
-status: partial
+status: experimental
 ```
 
 TeaCache is the FastWAM approximate feature-cache target. L1 is opt-in,

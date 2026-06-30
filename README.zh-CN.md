@@ -10,9 +10,13 @@
 
 # EazyWAM
 
-EazyWAM 是一个面向 world-action model 的部署与推理加速框架。它把分散在不同
-仓库里的 checkpoint、运行环境、资产准备、评测脚本、服务入口、优化开关和
-trace，整理成一个以 model id 为中心的 `wam` 工作流。
+EazyWAM 是一个面向 WAM/VLA 推理的系统级部署与加速 harness。它把分散在不同
+仓库里的 world-action model checkpoint、运行环境、资产准备、评测脚本、服务入口、
+加速方法和 trace，整理成一个以 model id 为中心的 `wam` 工作流。
+
+项目首先服务于 WAM 系统研究者和加速研究者，同时为只想跑模型的用户保留简单的
+命令体验。EazyWAM 不是 benchmark wrapper、训练框架、仿真器框架，也不是试图把
+所有 WAM 改写成同一种内部模型架构。
 
 ## 快速上手
 
@@ -106,6 +110,15 @@ wam eval fastwam-libero \
   --cache-dir /path/to/wam-cache
 ```
 
+### 运行 reference eval
+
+Reference eval 会调用上游官方脚本，用于 parity 对照或调试。它必须显式请求，
+不是默认的产品 eval 路径。
+
+```bash
+wam eval fastwam-libero --reference --upstream-dir /path/to/FastWAM
+```
+
 ### 在 RoboTwin 里评测 FastWAM
 
 需要在已经准备好的 FastWAM + RoboTwin runtime 里运行。
@@ -138,10 +151,15 @@ harness contract，不作为模型库 entry 展示。
 | `cosmos-policy-libero` | [![GitHub](https://img.shields.io/badge/GitHub-Cosmos--Policy-181717?logo=github)](https://github.com/NVlabs/cosmos-policy) [![Hugging Face](https://img.shields.io/badge/HF-Cosmos--Policy--LIBERO-FFD21E?logo=huggingface)](https://huggingface.co/nvidia/Cosmos-Policy-LIBERO-Predict2-2B) | `wam info cosmos-policy-libero` | native smoke 和官方脚本 parity 集成已开始。 |
 | `dreamzero-droid-sim` | [![GitHub](https://img.shields.io/badge/GitHub-DreamZero-181717?logo=github)](https://github.com/dreamzero0/dreamzero) [![Hugging Face](https://img.shields.io/badge/HF-DreamZero--DROID-FFD21E?logo=huggingface)](https://huggingface.co/GEAR-Dreams/DreamZero-DROID) [![Hugging Face](https://img.shields.io/badge/HF-DROID_sim_assets-FFD21E?logo=huggingface)](https://huggingface.co/owhan/DROID-sim-environments) | `wam info dreamzero-droid-sim` | resident policy-server 路径已开始；DROID sim 需要更重的多 GPU runtime。 |
 
-## 加速路线图
+## 加速方法目录
 
-EazyWAM 把推理加速做成显式 optimization profile。一个 profile 在进入默认路径前，
-必须声明作用范围、参数、trace 字段、输出检查和 rollout 状态。完整 profile 合同见
+加速方法目录和模型库是两个不同的公开目录。它列出 backend 集成的加速方法，以及
+通过 `wam run`、`wam eval`、`wam serve` 上的共享控制面 `--opt <method>` 暴露这些
+方法的 optimization profile。
+
+Optimization profile 是 EazyWAM 对加速方法的控制与验证合同。一个 profile 在进入
+默认路径前，必须声明作用范围、参数、trace 字段、输出检查和 rollout 状态。只有
+状态为 `measured` 且有证据的方法，才应该被描述为已经证明的加速。完整 profile 合同见
 [`docs/optimization_profiles.md`](docs/optimization_profiles.md)。
 
 当前公开优化主线是单请求 FastWAM 推理加速：`dit_cache(video_kv)`、
@@ -155,7 +173,7 @@ L1，以及 experimental opt-in `torch_compile`。暂缓的 batch serving 不在
 | Output control | action-only inference、no future video decode/save、text/goal embedding cache | FastWAM 已使用 action-only native inference，并默认 `return_future=false`；text/goal embedding cache 仍在规划中。 |
 | Scheduler / sampler | `num_inference_steps`、自定义 timesteps/sigmas、DPM-Solver++、UniPC、AYS、Karras、FlowMatch schedules | FastWAM 已实现 opt-in FlowMatch Euler scheduler profile，并有 SuperPod 单任务候选配置证据；跨 backend adapter 和其它 solver 仍在规划中。 |
 | Precision and attention | bf16/fp16/fp32、TF32、SDPA、FlashAttention、xFormers、SageAttention | bf16 默认值和 PyTorch SDPA 已部分支持；显式 backend selector 仍在规划中。SageAttention 保持 optional。 |
-| Native cache and exact runtime | FastWAM `dit_cache` (`video_kv`)、CUDA Graph、torch.compile、warmup/preallocation | FastWAM 已实现 `dit_cache` 和 `cuda_graph(auto)`；CUDA Graph 已有 SuperPod H800 加速证据。`torch_compile` 仍是 experimental，默认关闭。 |
+| Native cache and exact runtime | FastWAM `dit_cache` (`video_kv`)、CUDA Graph、torch.compile、warmup/preallocation | FastWAM 已实现 `dit_cache` 和 `cuda_graph(auto)`；CUDA Graph 已有针对特定 FastWAM 运行的 SuperPod H800 measured 加速证据。`torch_compile` 仍是 experimental，默认关闭。 |
 | WAM-specific approximate cache | TeaCache、PAB、FasterCache、cross-chunk cache、step skipping | FastWAM TeaCache L1 已实现为 opt-in 近似 action-denoise step-output cache；PAB 和 FasterCache 仍是 optional benchmark backend，不默认启用。 |
 | Throughput and serving | eval sharding、batched action denoise、dynamic batch serving、xDiT/multi-GPU | 暂缓。第一版 batch-serving prototype 已从产品主路径移除；这个方向应等单请求推理加速路径稳定后重新设计。 |
 | Experimental / not default | token merging、AsymRnR、Sparse VideoGen、PTQ methods、FP8 TensorRT | 只作为研究方向跟踪；进入 runtime profile 前需要模型级 success-rate 证据。 |
@@ -171,7 +189,11 @@ wam doctor <model-id>
 wam prepare <model-id>
 wam run <model-id> --input obs.json --output action.json
 wam eval <model-id> --workload <workload>
+wam eval <model-id> --reference
 wam serve <model-id>
+wam run <model-id> --input obs.json --opt <method>
+wam eval <model-id> --workload <workload> --opt <method>
+wam serve <model-id> --opt <method>
 wam compare <trace-a> <trace-b>
 ```
 
@@ -189,8 +211,11 @@ uv run ruff check .
 
 - `docs/cli_entrypoints.md` - 命令行为。
 - `docs/fastwam_libero_eval_setup.md` - FastWAM 环境和 eval 流程。
+- `docs/fastwam_libero_deep_exemplar.md` - 可复用的第一个真实 WAM 深度示例路径。
 - `docs/dependency_isolation.md` - 容器和自管理环境。
 - `docs/wamfile.md` - model entry schema。
+- `docs/acceleration_methods.md` - 加速方法目录和 measured 证据标准。
+- `docs/architecture_boundary_audit.md` - core/backend/processor 边界审计。
 - `docs/optimization_integration.md` - optimization profile 设计。
 - `docs/optimization_profiles.md` - 加速 profile 分类和状态。
 - `docs/trace_schema.md` - trace 事件 schema。

@@ -1,8 +1,8 @@
 # CLI Entry Points
 
-EazyWAM should feel like a local model tool, not a cluster or systems
-framework. The first user-facing commands should be few, plain, and ordered
-around what a new user naturally needs to do.
+EazyWAM should feel like a local model-and-acceleration tool, not a cluster
+submission interface or benchmark wrapper. The first user-facing commands
+should be few, plain, and ordered around what a new user naturally needs to do.
 
 ## Primary User Flow
 
@@ -13,6 +13,7 @@ wam doctor fastwam-libero
 wam prepare fastwam-libero --cache-dir /mnt/wam-cache
 wam run fastwam-libero --input obs.json --output action.json --cache-dir /mnt/wam-cache --trace-dir runs
 wam eval fastwam-libero --workload libero-single-task --task-id 0 --num-trials 1 --cache-dir /mnt/wam-cache
+wam eval fastwam-libero --workload libero-single-task --opt scheduler --set num_inference_steps=6 --cache-dir /mnt/wam-cache
 wam serve fastwam-libero --cache-dir /mnt/wam-cache --trace-dir runs
 wam serve fastwam-libero --smoke --smoke-input obs.json --cache-dir /mnt/wam-cache
 ```
@@ -34,9 +35,16 @@ out of the first user-facing flow.
 | `wam doctor [model]` | Check whether this machine or runtime can run EazyWAM, optionally for one model. | Diagnose missing GPU, cache path, required assets, and native backend repo mounts without modifying the environment. |
 | `wam prepare <model>` | Prepare this model's assets for use. | Create cache directories, verify declared assets, and explain remaining manual requirements. |
 | `wam run <model> --input obs.json` | Run one explicit observation through the product path. | Refuse to invent a WAM observation; one-shot inference uses the same observation contract as serve. |
-| `wam eval <model>` | Run a curated simulator evaluation for this model. | Make real simulator smoke/full-suite runs easy while still tracing the command, environment, and outputs. |
+| `wam eval <model>` | Run a curated simulator evaluation for this model. | Wrap the same backend and processor path used by run or serve inside a workload loop, then record episode metrics and traces. |
 | `wam serve <model>` | Start a local or job-local policy server. | Keep a model resident for repeated observation-to-action calls. |
 | `wam compare <run-a> <run-b>` | Compare two recorded runs. | Report latency, memory, output drift, and optimization profile differences. |
+
+Acceleration methods use the shared `--opt <method>` control on `run`, `eval`,
+and `serve`. Method-specific parameters should stay in shared override or
+runtime-option mechanisms rather than becoming model-specific public flags.
+Documentation must keep method status explicit: implemented or experimental
+profiles are available to test, while only measured profiles with validation
+evidence should be described as proven speedups.
 
 For FastWAM, the first product simulator workload is the harness-owned LIBERO
 single-task loop:
@@ -48,7 +56,7 @@ wam eval fastwam-libero \
   --num-trials 1
 ```
 
-Explicit reference mode stays available for parity runs and comparisons:
+Explicit reference eval mode stays available for parity runs and comparisons:
 
 ```bash
 wam eval fastwam-libero --reference --upstream-dir /mnt/upstreams/FastWAM
@@ -68,7 +76,9 @@ reuse the same checkpoint, processor, and action schema.
 --input` and `wam serve` keep using the native observation-to-action product
 path; `wam eval` runs the curated simulator workload declared by the model
 entry and records episode metrics plus trace metadata. Explicit `--reference`
-evals record stdout/stderr from the upstream official script.
+evals call the upstream official script and record stdout/stderr from that
+reference path. Reference eval is useful for parity and debugging, but it is not
+the default EazyWAM product eval path.
 
 For scripts and CI, write the machine-readable summary directly instead of
 scraping stdout:
