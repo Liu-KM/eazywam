@@ -125,6 +125,7 @@ optimizations:
       params:
         scheduler_name: fastwam_flowmatch_euler
         schedule_type: shifted_flowmatch
+        schedule_preset: null
         num_inference_steps: null
         sigma_shift: null
         timesteps: null

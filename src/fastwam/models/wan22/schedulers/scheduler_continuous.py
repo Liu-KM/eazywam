@@ -1,6 +1,10 @@
 import torch
 
 
+_AYS_SIGMA_ANCHORS = (1.0, 0.845, 0.73, 0.587, 0.443, 0.31, 0.193, 0.116, 0.053, 0.013)
+_SCHEDULE_PRESETS = {"shifted_flowmatch", "karras", "ays"}
+
+
 def _as_1d_float_tensor(
     values: object,
     *,
@@ -24,6 +28,18 @@ def _as_1d_float_tensor(
 
 def _round_float(value: float) -> float:
     return round(float(value), 8)
+
+
+def _normalize_schedule_preset(value: object | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().lower().replace("-", "_")
+    if text in {"", "none", "null"}:
+        return None
+    if text not in _SCHEDULE_PRESETS:
+        supported = ", ".join(sorted(_SCHEDULE_PRESETS))
+        raise ValueError(f"`schedule_preset` must be one of: {supported}; got {value!r}.")
+    return text
 
 
 def _summarize_1d_tensor(values: torch.Tensor, *, max_items: int = 64) -> dict[str, object]:
@@ -118,7 +134,11 @@ class WanContinuousFlowMatchScheduler:
         shift_override: float | None = None,
         timesteps: object | None = None,
         sigmas: object | None = None,
+        schedule_preset: object | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        preset = _normalize_schedule_preset(schedule_preset)
+        if preset is not None and (timesteps is not None or sigmas is not None):
+            raise ValueError("`schedule_preset`, `timesteps`, and `sigmas` are mutually exclusive.")
         if timesteps is not None and sigmas is not None:
             raise ValueError("`timesteps` and `sigmas` are mutually exclusive.")
         if sigmas is not None:
@@ -147,6 +167,17 @@ class WanContinuousFlowMatchScheduler:
 
         if num_inference_steps <= 0:
             raise ValueError(f"`num_inference_steps` must be positive, got {num_inference_steps}")
+        if preset == "karras":
+            return self._schedule_from_sigmas(
+                self._karras_sigmas(num_inference_steps, device=device, dtype=dtype),
+                dtype=dtype,
+            )
+        if preset == "ays":
+            return self._schedule_from_sigmas(
+                self._ays_sigmas(num_inference_steps, device=device, dtype=dtype),
+                dtype=dtype,
+            )
+
         shift = self.shift if shift_override is None else float(shift_override)
         if shift <= 0:
             raise ValueError(f"`shift` must be positive, got {shift}")
@@ -171,6 +202,42 @@ class WanContinuousFlowMatchScheduler:
         timesteps = sigma_steps * float(self.num_train_timesteps)
         return timesteps.to(dtype=dtype), deltas.to(dtype=dtype)
 
+    def _karras_sigmas(
+        self,
+        num_inference_steps: int,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+        rho: float = 7.0,
+    ) -> torch.Tensor:
+        sigma_min = 1.0 / float(self.num_train_timesteps)
+        sigma_max = 1.0
+        ramp = torch.linspace(0.0, 1.0, num_inference_steps, device=device, dtype=torch.float32)
+        min_inv_rho = sigma_min ** (1.0 / rho)
+        max_inv_rho = sigma_max ** (1.0 / rho)
+        sigmas = (max_inv_rho + ramp * (min_inv_rho - max_inv_rho)) ** rho
+        return sigmas.to(dtype=dtype)
+
+    def _ays_sigmas(
+        self,
+        num_inference_steps: int,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        anchors = torch.tensor(_AYS_SIGMA_ANCHORS, device=device, dtype=torch.float32)
+        if num_inference_steps == anchors.numel():
+            return anchors.to(dtype=dtype)
+
+        anchor_x = torch.linspace(0.0, 1.0, anchors.numel(), device=device, dtype=torch.float32)
+        target_x = torch.linspace(0.0, 1.0, num_inference_steps, device=device, dtype=torch.float32)
+        right = torch.searchsorted(anchor_x, target_x, right=True).clamp(1, anchors.numel() - 1)
+        left = right - 1
+        span = anchor_x[right] - anchor_x[left]
+        weight = (target_x - anchor_x[left]) / span
+        sigmas = anchors[left] + weight * (anchors[right] - anchors[left])
+        return sigmas.to(dtype=dtype)
+
     def inference_schedule_metadata(
         self,
         *,
@@ -180,8 +247,10 @@ class WanContinuousFlowMatchScheduler:
         shift_override: float | None = None,
         schedule_type: str = "shifted_flowmatch",
         schedule_source: str = "generated",
+        schedule_preset: object | None = None,
     ) -> dict[str, object]:
         shift = self.shift if shift_override is None else float(shift_override)
+        preset = _normalize_schedule_preset(schedule_preset)
         sigma_steps = timesteps.detach().to(device="cpu", dtype=torch.float64) / float(
             self.num_train_timesteps
         )
@@ -190,6 +259,7 @@ class WanContinuousFlowMatchScheduler:
             "scheduler_name": "fastwam_flowmatch_euler",
             "solver": "euler",
             "schedule_type": schedule_type,
+            "schedule_preset": preset,
             "schedule_source": schedule_source,
             "num_train_timesteps": self.num_train_timesteps,
             "num_inference_steps": int(num_inference_steps),

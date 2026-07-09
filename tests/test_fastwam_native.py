@@ -99,6 +99,7 @@ def test_fastwam_manifests_build_scheduler_profile_without_changing_default_step
         assert profiles[0].params == {
             "scheduler_name": "fastwam_flowmatch_euler",
             "schedule_type": "shifted_flowmatch",
+            "schedule_preset": None,
             "num_inference_steps": None,
             "sigma_shift": None,
             "timesteps": None,
@@ -413,6 +414,79 @@ def test_fastwam_model_adapter_scheduler_profile_and_runtime_options() -> None:
     assert overridden.metadata["num_inference_steps"] == 4
     assert adapter.model.kwargs["sigma_shift"] == 2.0
     assert adapter.model.kwargs["timesteps"] == "1000,500,250,125"
+    assert "sigmas" not in adapter.model.kwargs
+
+
+def test_fastwam_model_adapter_scheduler_preset_runtime_option() -> None:
+    adapter = FastWAMModelAdapter(
+        model=_ModelRequiringNumVideoFrames(),
+        cfg=_fastwam_cfg(),
+        checkpoint_path=None,
+        dataset_stats_path=None,
+        config={},
+        dit_cache_params={"mode": "video_kv"},
+        scheduler_params={"schedule_preset": "karras"},
+        no_grad_factory=lambda: nullcontext(),
+        error_cls=FastWAMNativeBackendError,
+    )
+
+    profiled = adapter.infer(
+        InferenceRequest(
+            observation=Observation(images={}, prompt="open the drawer"),
+            action_horizon=32,
+            replan_steps=10,
+        ),
+        {"prompt": "prompt", "input_image": "image", "proprio": "proprio"},
+    )
+    assert adapter.model.kwargs["schedule_preset"] == "karras"
+
+    overridden = adapter.infer(
+        InferenceRequest(
+            observation=Observation(images={}, prompt="open the drawer"),
+            action_horizon=32,
+            replan_steps=10,
+            runtime_options={"schedule_preset": "ays"},
+        ),
+        {"prompt": "prompt", "input_image": "image", "proprio": "proprio"},
+    )
+
+    assert profiled.metadata["scheduler_profile_enabled"] is True
+    assert overridden.metadata["scheduler_profile_enabled"] is True
+    assert adapter.model.kwargs["schedule_preset"] == "ays"
+
+
+def test_fastwam_model_adapter_rejects_ambiguous_scheduler_schedule_inputs() -> None:
+    adapter = FastWAMModelAdapter(
+        model=_ModelRequiringNumVideoFrames(),
+        cfg=_fastwam_cfg(),
+        checkpoint_path=None,
+        dataset_stats_path=None,
+        config={},
+        dit_cache_params={"mode": "video_kv"},
+        scheduler_params={"schedule_preset": "karras", "sigmas": [1.0, 0.5]},
+        no_grad_factory=lambda: nullcontext(),
+        error_cls=FastWAMNativeBackendError,
+    )
+
+    with pytest.raises(FastWAMNativeBackendError, match="profile schedule inputs"):
+        adapter.infer(
+            InferenceRequest(
+                observation=Observation(images={}, prompt="open the drawer"),
+                action_horizon=32,
+                replan_steps=10,
+            ),
+            {"prompt": "prompt", "input_image": "image", "proprio": "proprio"},
+        )
+    with pytest.raises(FastWAMNativeBackendError, match="runtime schedule inputs"):
+        adapter.infer(
+            InferenceRequest(
+                observation=Observation(images={}, prompt="open the drawer"),
+                action_horizon=32,
+                replan_steps=10,
+                runtime_options={"schedule_preset": "ays", "timesteps": "1000,500"},
+            ),
+            {"prompt": "prompt", "input_image": "image", "proprio": "proprio"},
+        )
 
 
 def test_fastwam_model_adapter_accepts_string_null_sigma_shift_runtime_option() -> None:

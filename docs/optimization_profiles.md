@@ -188,6 +188,7 @@ parameters:
   scheduler_name: backend_default
   solver: backend_default
   schedule_type: backend_default
+  schedule_preset: null
   timesteps: null
   sigmas: null
 requires:
@@ -202,6 +203,7 @@ trace_fields:
   - timesteps
   - sigmas
   - schedule_type
+  - schedule_preset
   - schedule_source
   - denoise_wall_ms
   - total_ms
@@ -216,14 +218,23 @@ core.
 
 FastWAM currently exposes a training-free `scheduler` profile for its native
 shifted FlowMatch Euler action scheduler. The default profile parameters are
-null for `num_inference_steps`, `sigma_shift`, `timesteps`, and `sigmas`, so
-enabling the profile without overrides does not change the current 10-step
-FastWAM LIBERO/RoboTwin eval baseline. Users can sweep values through eval
-manifest overrides, for example `wam eval fastwam-libero --opt scheduler --set
-num_inference_steps=6 --set sigma_shift=3.0`, or through request
-`runtime_options` on resident native inference paths. `timesteps` and `sigmas`
-are mutually exclusive Diffusers-style custom schedule inputs; when provided,
-FastWAM traces `schedule_source` as `custom_timesteps` or `custom_sigmas`.
+null for `num_inference_steps`, `sigma_shift`, `schedule_preset`, `timesteps`,
+and `sigmas`, so enabling the profile without overrides does not change the
+current 10-step FastWAM LIBERO/RoboTwin eval baseline. Users can sweep values
+through eval manifest overrides, for example `wam eval fastwam-libero --opt
+scheduler --set num_inference_steps=6 --set sigma_shift=3.0`, or through
+request `runtime_options` on resident native inference paths.
+
+FastWAM named schedule presets are opt-in candidates under the same
+FlowMatch-Euler update rule, not new solvers and not defaults. Use
+`schedule_preset=karras` or `schedule_preset=ays` to generate a preset sigma
+path without hand-writing `timesteps` or `sigmas`; use
+`schedule_preset=shifted_flowmatch` only to explicitly select the existing
+generated path. Explicit `timesteps`, explicit `sigmas`, and `schedule_preset`
+are mutually exclusive within the same configuration layer, and runtime options
+take priority over profile params. FastWAM traces `schedule_source` as
+`generated`, `custom_timesteps`, `custom_sigmas`, `preset_karras`,
+`preset_ays`, or `preset_shifted_flowmatch`.
 
 ### `dtype`
 
